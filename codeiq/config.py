@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .llm.catalog import POPULAR_MODELS, SUPPORTED_PROVIDERS
+from .llm.catalog import POPULAR_MODELS, PROVIDER_LABELS, SUPPORTED_PROVIDERS
 
 
 class Config:
@@ -37,6 +37,16 @@ class Config:
         self.anthropic_api_key: str = os.getenv("ANTHROPIC_API_KEY", "")
         self.groq_api_key: str = os.getenv("GROQ_API_KEY", "")
         self.ollama_base_url: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+
+        # Dynamic provider registry and per-provider keys
+        self.providers: list[str] = list(SUPPORTED_PROVIDERS)
+        self.provider_api_keys: Dict[str, str] = {
+            "gemini": self.gemini_api_key,
+            "openai": self.openai_api_key,
+            "anthropic": self.anthropic_api_key,
+            "groq": self.groq_api_key,
+            "ollama": "",
+        }
 
         # Provider model catalog (allows multiple models per provider)
         self.provider_models: Dict[str, list[str]] = {
@@ -85,9 +95,15 @@ class Config:
             self.provider = data["provider"]
         if "model" in data:
             self.model = data["model"]
+        if "providers" in data and isinstance(data["providers"], list):
+            for provider in data["providers"]:
+                self.add_provider(str(provider))
         if "provider_models" in data and isinstance(data["provider_models"], dict):
             for provider, models in data["provider_models"].items():
                 self.set_models_for_provider(provider, models)
+        if "provider_api_keys" in data and isinstance(data["provider_api_keys"], dict):
+            for provider, api_key in data["provider_api_keys"].items():
+                self.set_api_key(provider, str(api_key or ""))
         if "auto_approve" in data:
             self.auto_approve = bool(data["auto_approve"])
         if "temperature" in data:
@@ -95,15 +111,15 @@ class Config:
         if "max_steps" in data:
             self.max_steps = int(data["max_steps"])
         if "gemini_api_key" in data and data["gemini_api_key"]:
-            self.gemini_api_key = data["gemini_api_key"]
+            self.set_api_key("gemini", data["gemini_api_key"])
         if "openai_api_key" in data and data["openai_api_key"]:
-            self.openai_api_key = data["openai_api_key"]
+            self.set_api_key("openai", data["openai_api_key"])
         if "openai_base_url" in data and data["openai_base_url"]:
             self.openai_base_url = data["openai_base_url"]
         if "anthropic_api_key" in data and data["anthropic_api_key"]:
-            self.anthropic_api_key = data["anthropic_api_key"]
+            self.set_api_key("anthropic", data["anthropic_api_key"])
         if "groq_api_key" in data and data["groq_api_key"]:
-            self.groq_api_key = data["groq_api_key"]
+            self.set_api_key("groq", data["groq_api_key"])
         if "ollama_base_url" in data and data["ollama_base_url"]:
             self.ollama_base_url = data["ollama_base_url"]
 
@@ -115,7 +131,9 @@ class Config:
             "auto_approve": self.auto_approve,
             "temperature": self.temperature,
             "max_steps": self.max_steps,
+            "providers": self.get_all_providers(),
             "provider_models": self.provider_models,
+            "provider_api_keys": self.provider_api_keys,
             "gemini_api_key": self.gemini_api_key,
             "openai_api_key": self.openai_api_key,
             "anthropic_api_key": self.anthropic_api_key,
@@ -128,6 +146,9 @@ class Config:
 
     def get_models_for_provider(self, provider: str) -> list[str]:
         prov = provider.lower().strip()
+        if not prov:
+            return []
+        self.add_provider(prov)
         default_models = POPULAR_MODELS.get(prov, [])
         configured = self.provider_models.get(prov, [])
         source_models = configured if configured else default_models
@@ -141,8 +162,9 @@ class Config:
 
     def set_models_for_provider(self, provider: str, models: Any) -> None:
         prov = provider.lower().strip()
-        if prov not in SUPPORTED_PROVIDERS:
+        if not prov:
             return
+        self.add_provider(prov)
 
         clean: list[str] = []
         if isinstance(models, list):
@@ -162,8 +184,51 @@ class Config:
         self.provider_models[prov] = models
         return models
 
+    def get_all_providers(self) -> list[str]:
+        merged: list[str] = []
+        for provider in self.providers + list(SUPPORTED_PROVIDERS):
+            name = str(provider).strip().lower()
+            if name and name not in merged:
+                merged.append(name)
+        self.providers = merged
+        return list(self.providers)
+
+    def add_provider(self, provider: str) -> list[str]:
+        prov = provider.strip().lower()
+        if not prov:
+            return self.get_all_providers()
+        if prov not in self.providers:
+            self.providers.append(prov)
+        if prov not in self.provider_models:
+            self.provider_models[prov] = list(POPULAR_MODELS.get(prov, []))
+        if prov not in self.provider_api_keys:
+            self.provider_api_keys[prov] = ""
+        self.get_all_providers()
+        return list(self.providers)
+
+    def set_api_key(self, provider: str, api_key: str) -> None:
+        prov = provider.lower().strip()
+        self.add_provider(prov)
+        key = (api_key or "").strip()
+        self.provider_api_keys[prov] = key
+
+        if prov in ("gemini", "google"):
+            self.gemini_api_key = key
+        elif prov == "openai":
+            self.openai_api_key = key
+        elif prov == "anthropic":
+            self.anthropic_api_key = key
+        elif prov == "groq":
+            self.groq_api_key = key
+
+    def get_provider_label(self, provider: str) -> str:
+        prov = provider.lower().strip()
+        return PROVIDER_LABELS.get(prov, prov.capitalize())
+
     def get_api_key(self, provider: Optional[str] = None) -> str:
         prov = (provider or self.provider).lower()
+        if prov in self.provider_api_keys and self.provider_api_keys[prov]:
+            return self.provider_api_keys[prov]
         if prov in ("gemini", "google"):
             return self.gemini_api_key or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
         if prov == "openai":

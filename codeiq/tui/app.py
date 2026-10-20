@@ -19,7 +19,6 @@ from ..config import Config
 from ..models import ChatMessage, Role, Session, ToolCall, ToolState
 from ..storage.session_store import SessionStore
 from ..tools.git_tools import get_git_status_summary, git_diff, git_status
-from ..llm.catalog import SUPPORTED_PROVIDERS
 from ..tools.registry import ToolRegistry
 from .modals.approval_modal import ApprovalModal
 from .modals.session_modal import SessionManagerModal
@@ -431,7 +430,7 @@ class CodeIqApp(App):
 - **`/exit`** or **`/quit`**: Exit and close the CodeIq TUI
 - **`/clear`**: Clear current chat screen
 - **`/sessions`** or **`/resume`**: Open session history manager
-- **`/provider <name>`**: Switch provider (`gemini`, `openai`, `anthropic`, `groq`, `ollama`)
+- **`/provider <name>`**: Switch provider (supports custom providers)
 - **`/model <name>`**: Switch model for current provider
 - **`/models`**: List all providers and model catalogs
 - **`/git`**: Inspect current Git repository status
@@ -478,35 +477,35 @@ class CodeIqApp(App):
 
         elif name == "/provider":
             if arg:
-                if arg not in SUPPORTED_PROVIDERS:
-                    available = ", ".join(SUPPORTED_PROVIDERS)
-                    self._append_system_notice(f"Unknown provider `{arg}`. Available: {available}.")
-                    return
-                self.session.provider = arg
-                self.config.provider = arg
-                provider_models = self.config.get_models_for_provider(arg)
+                provider_name = arg.strip().lower()
+                self.config.add_provider(provider_name)
+                self.session.provider = provider_name
+                self.config.provider = provider_name
+                provider_models = self.config.get_models_for_provider(provider_name)
                 if self.session.model not in provider_models and provider_models:
                     self.session.model = provider_models[0]
                 self.config.model = self.session.model
                 self.config.save_project_config()
-                self.agent.switch_model(arg, self.session.model)
+                self.agent.switch_model(provider_name, self.session.model)
                 self.status_bar.update_metrics(
                     tokens=self.session.total_tokens,
                     model=self.session.model,
-                    provider=arg,
+                    provider=provider_name,
                 )
                 self._append_system_notice(
-                    f"Switched provider to **{arg}** with model **{self.session.model}**."
+                    f"Switched provider to **{provider_name}** with model **{self.session.model}**."
                 )
             else:
                 self.action_open_settings()
 
         elif name == "/models":
             lines = ["### 🧠 Provider Model Catalog:"]
-            for provider, models in self.config.provider_models.items():
+            for provider in self.config.get_all_providers():
+                models = self.config.get_models_for_provider(provider)
                 marker = " (active)" if provider == self.session.provider else ""
                 rendered = ", ".join(f"`{provider} | {m}`" for m in models[:12])
-                lines.append(f"- **{provider}**{marker}: {rendered if rendered else '_No models configured_'}")
+                key_status = "key set" if self.config.get_api_key(provider) else "no key"
+                lines.append(f"- **{provider}**{marker} ({key_status}): {rendered if rendered else '_No models configured_'}")
             lines.append("- Use `/provider <name>` then `/model <name>` to switch quickly.")
             self._append_system_notice("\n".join(lines))
 

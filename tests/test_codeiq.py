@@ -180,3 +180,13 @@ def test_config_provider_model_catalog(tmp_path: Path):
     cfg.save_project_config()
     loaded = Config(cwd=str(tmp_path))
     assert "gemini-experimental-preview" in loaded.get_models_for_provider("gemini")
+
+    loaded.add_provider("openrouter")
+    loaded.add_model_for_provider("openrouter", "openrouter/auto")
+    loaded.set_api_key("openrouter", "or-key-test")
+    loaded.save_project_config()
+
+    reloaded = Config(cwd=str(tmp_path))
+    assert "openrouter" in reloaded.get_all_providers()
+    assert "openrouter/auto" in reloaded.get_models_for_provider("openrouter")
+    assert reloaded.get_api_key("openrouter") == "or-key-test"

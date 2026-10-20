@@ -1,0 +1,320 @@
+/* CodeIq Modern Terminal User Interface Styling */
+
+Screen {
+    background: #181825;
+    color: #cdd6f4;
+    layout: vertical;
+}
+
+#app-header {
+    dock: top;
+    height: 3;
+    background: #11111b;
+    color: #cdd6f4;
+    padding: 0 1;
+    layout: horizontal;
+    align-vertical: middle;
+    border-bottom: heavy #313244;
+}
+
+#header-title {
+    color: #89b4fa;
+    text-style: bold;
+    width: auto;
+}
+
+#header-badge {
+    background: #313244;
+    color: #a6e3a1;
+    padding: 0 1;
+    margin-left: 1;
+    text-style: bold;
+}
+
+#header-cwd {
+    color: #a6adc8;
+    margin-left: 2;
+    text-style: italic;
+    width: 1fr;
+}
+
+#header-git {
+    color: #f9e2af;
+    text-style: bold;
+    margin-right: 1;
+    width: auto;
+}
+
+/* Main Body Layout */
+#main-container {
+    height: 1fr;
+    layout: horizontal;
+}
+
+/* Sidebar (Explorer) */
+#sidebar {
+    width: 32;
+    background: #1e1e2e;
+    border-right: solid #313244;
+    padding: 0 1;
+    layout: vertical;
+}
+
+#sidebar.hidden {
+    display: none;
+}
+
+#sidebar-header {
+    height: 2;
+    color: #89dceb;
+    text-style: bold;
+    border-bottom: solid #313244;
+    padding: 0 1;
+}
+
+#file-tree-view {
+    height: 1fr;
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+
+/* Chat Container */
+#chat-container {
+    width: 1fr;
+    height: 1fr;
+    layout: vertical;
+    background: #181825;
+}
+
+#chat-scroll-area {
+    height: 1fr;
+    padding: 1 2;
+    scrollbar-color: #45475a #181825;
+    scrollbar-size-vertical: 1;
+}
+
+/* Welcome Box */
+#welcome-banner {
+    background: #1e1e2e;
+    border: round #89b4fa;
+    padding: 1 2;
+    margin-bottom: 1;
+    color: #cdd6f4;
+}
+
+/* Message Bubbles */
+.message-bubble {
+    margin-bottom: 1;
+    padding: 1;
+}
+
+.message-user {
+    background: #1e1e2e;
+    border-left: thick #89b4fa;
+    color: #cdd6f4;
+}
+
+.message-assistant {
+    background: #181825;
+    border-left: thick #a6e3a1;
+    color: #cdd6f4;
+}
+
+.message-header {
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+.user-header {
+    color: #89b4fa;
+}
+
+.assistant-header {
+    color: #a6e3a1;
+}
+
+.timestamp {
+    color: #6c7086;
+    text-style: italic;
+}
+
+/* Tool Execution Widget */
+.tool-bubble {
+    background: #11111b;
+    border: round #45475a;
+    margin: 1 0;
+    padding: 0 1;
+}
+
+.tool-pending {
+    border: round #f9e2af;
+}
+
+.tool-running {
+    border: round #89dceb;
+}
+
+.tool-success {
+    border: round #a6e3a1;
+}
+
+.tool-error {
+    border: round #f38ba8;
+}
+
+.tool-header-row {
+    height: 1;
+    layout: horizontal;
+    margin-top: 1;
+}
+
+.tool-title {
+    color: #fab387;
+    text-style: bold;
+    width: 1fr;
+}
+
+.tool-badge {
+    text-style: bold;
+}
+
+.tool-diff-container {
+    background: #181825;
+    border: solid #313244;
+    padding: 1;
+    margin: 1 0;
+}
+
+.tool-output-block {
+    background: #11111b;
+    color: #a6adc8;
+    padding: 1;
+    margin-top: 1;
+    max-height: 16;
+}
+
+/* Input Area */
+#input-container {
+    height: auto;
+    min-height: 4;
+    max-height: 10;
+    background: #1e1e2e;
+    border-top: heavy #313244;
+    padding: 0 1;
+    layout: vertical;
+}
+
+#chat-input {
+    background: #11111b;
+    color: #cdd6f4;
+    border: none;
+    height: 3;
+    padding: 0 1;
+}
+
+#chat-input:focus {
+    border: none;
+}
+
+#input-hints-bar {
+    height: 1;
+    color: #6c7086;
+    padding: 0 1;
+    text-style: italic;
+    layout: horizontal;
+}
+
+#input-hints-left {
+    width: 1fr;
+}
+
+#input-hints-right {
+    width: auto;
+    color: #89b4fa;
+}
+
+/* Status Bar Footer */
+#app-status-bar {
+    dock: bottom;
+    height: 1;
+    background: #11111b;
+    color: #a6adc8;
+    padding: 0 1;
+    layout: horizontal;
+    border-top: solid #313244;
+}
+
+.status-item {
+    margin-right: 2;
+}
+
+#status-model {
+    color: #a6e3a1;
+    text-style: bold;
+}
+
+#status-tokens {
+    color: #89dceb;
+}
+
+#status-cost {
+    color: #f9e2af;
+    text-style: bold;
+}
+
+#status-keys {
+    color: #6c7086;
+    width: 1fr;
+    text-align: right;
+}
+
+/* Modal Screens */
+.modal-overlay {
+    background: rgba(0, 0, 0, 0.75);
+    align: center middle;
+}
+
+.modal-dialog {
+    background: #1e1e2e;
+    border: thick #89b4fa;
+    padding: 1 2;
+    width: 80;
+    max-width: 90%;
+    max-height: 85%;
+    layout: vertical;
+}
+
+.modal-title {
+    color: #89b4fa;
+    text-style: bold;
+    border-bottom: solid #313244;
+    margin-bottom: 1;
+    padding-bottom: 1;
+}
+
+.modal-buttons {
+    layout: horizontal;
+    height: 3;
+    align-horizontal: right;
+    margin-top: 1;
+}
+
+.btn-approve {
+    background: #a6e3a1;
+    color: #11111b;
+    text-style: bold;
+    margin-left: 1;
+}
+
+.btn-reject {
+    background: #f38ba8;
+    color: #11111b;
+    text-style: bold;
+    margin-left: 1;
+}
+
+.btn-secondary {
+    background: #313244;
+    color: #cdd6f4;
+    margin-left: 1;
+}

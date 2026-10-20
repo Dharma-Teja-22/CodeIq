@@ -216,6 +216,29 @@ Screen {
     border: none;
 }
 
+#command-hint-panel {
+    background: #11111b;
+    color: #a6adc8;
+    border: solid #313244;
+    padding: 0 1;
+    margin: 0 1;
+    height: auto;
+    max-height: 8;
+}
+
+#command-hint-panel > .option-list--option-highlighted {
+    background: #313244;
+    color: #cdd6f4;
+}
+
+#command-hint-panel.hidden {
+    display: none;
+}
+
+#command-hint-panel.visible {
+    display: block;
+}
+
 #input-hints-bar {
     height: 1;
     color: #6c7086;

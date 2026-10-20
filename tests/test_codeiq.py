@@ -22,6 +22,7 @@ from codeiq.tools.file_tools import (
 )
 from codeiq.tools.registry import ToolRegistry
 from codeiq.agent.context import ContextManager
+from codeiq.config import Config
 
 
 def test_models_serialization():
@@ -164,3 +165,18 @@ def test_tool_registry_schemas():
     openai_tools = reg.to_openai_tools()
     assert len(openai_tools) >= 10
     assert openai_tools[0]["type"] == "function"
+
+
+def test_config_provider_model_catalog(tmp_path: Path):
+    cfg = Config(cwd=str(tmp_path))
+
+    assert "gemini-2.5-flash" in cfg.get_models_for_provider("gemini")
+    assert "gpt-4o" in cfg.get_models_for_provider("openai")
+    assert "claude-3-7-sonnet-latest" in cfg.get_models_for_provider("anthropic")
+
+    updated = cfg.add_model_for_provider("gemini", "gemini-experimental-preview")
+    assert updated[0] == "gemini-experimental-preview"
+
+    cfg.save_project_config()
+    loaded = Config(cwd=str(tmp_path))
+    assert "gemini-experimental-preview" in loaded.get_models_for_provider("gemini")

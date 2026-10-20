@@ -1,7 +1,8 @@
 """LLM provider subsystem for CodeIq."""
 
 from .base import BaseLLMProvider, StreamChunk
-from .factory import create_llm_provider, POPULAR_MODELS
+from .catalog import POPULAR_MODELS
+from .anthropic import AnthropicProvider
 from .gemini import GeminiProvider
 from .openai_provider import OpenAICompatibleProvider
 from .pricing import calculate_cost, estimate_tokens
@@ -9,8 +10,8 @@ from .pricing import calculate_cost, estimate_tokens
 __all__ = [
     "BaseLLMProvider",
     "StreamChunk",
-    "create_llm_provider",
     "POPULAR_MODELS",
+    "AnthropicProvider",
     "GeminiProvider",
     "OpenAICompatibleProvider",
     "calculate_cost",

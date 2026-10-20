@@ -4,19 +4,22 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
-from textual.widgets import Header, Input, Label, Static
+from textual.widgets import Header, Input, Label, OptionList, Static
+from textual.widgets.option_list import Option
 
 from ..agent.agent import CodeIqAgent
 from ..config import Config
 from ..models import ChatMessage, Role, Session, ToolCall, ToolState
 from ..storage.session_store import SessionStore
 from ..tools.git_tools import get_git_status_summary, git_diff, git_status
+from ..llm.catalog import SUPPORTED_PROVIDERS
 from ..tools.registry import ToolRegistry
 from .modals.approval_modal import ApprovalModal
 from .modals.session_modal import SessionManagerModal
@@ -35,8 +38,25 @@ WELCOME_BANNER = """# 🚀 CodeIq — Terminal AI Coding Assistant
 - **Active Model:** `{model}` ({provider})
 - **Shortcuts:** `Ctrl+B` Files | `Ctrl+S` Settings | `Ctrl+N` New Session | `Ctrl+O` Resume | `Ctrl+L` Clear | `Ctrl+Q` Quit
 - **Mention files:** Type `@filename` (or click files in the left sidebar) to load them into context.
-- **Slash Commands:** Type `/help`, `/exit`, `/git`, `/diff`, `/sessions`, `/model`, `/stats`, `/autoapprove`, `/export`
+- **Slash Commands:** Type `/help`, `/exit`, `/git`, `/diff`, `/sessions`, `/provider`, `/model`, `/models`, `/stats`, `/autoapprove`, `/export`
 """
+
+
+SLASH_COMMAND_OPTIONS = [
+    ("/help", "Show command manual"),
+    ("/sessions", "Open session manager"),
+    ("/provider", "Switch active provider"),
+    ("/model", "Switch active model"),
+    ("/models", "List provider models"),
+    ("/git", "Show git status"),
+    ("/diff", "Show git diff"),
+    ("/stats", "Show tokens and cost"),
+    ("/autoapprove", "Toggle auto-approve"),
+    ("/export", "Export session markdown"),
+    ("/files", "Toggle file explorer"),
+    ("/clear", "Clear visible chat"),
+    ("/exit", "Quit CodeIq"),
+]
 
 
 class CodeIqApp(App):
@@ -138,6 +158,8 @@ class CodeIqApp(App):
                             for tc in msg.tool_calls:
                                 yield ToolBubble(tc)
 
+                yield OptionList(id="command-hint-panel", classes="hidden")
+
                 # Bottom Chat Input Area
                 with Vertical(id="input-container"):
                     self.chat_input = Input(
@@ -165,6 +187,7 @@ class CodeIqApp(App):
             model=self.session.model,
             provider=self.session.provider,
         )
+        self._update_command_dropdown("")
 
     # --- Key Actions ---
     def action_toggle_sidebar(self) -> None:
@@ -175,6 +198,7 @@ class CodeIqApp(App):
         def on_settings_closed(result: Optional[dict]):
             if result:
                 self.config.apply_dict(result)
+                self.config.save_project_config()
                 self.session.provider = result["provider"]
                 self.session.model = result["model"]
                 self.agent.switch_model(result["provider"], result["model"])
@@ -287,12 +311,92 @@ class CodeIqApp(App):
         self.chat_input.focus()
 
     # --- Prompt Handling & Agent Turn ---
+    def on_input_changed(self, event: Input.Changed) -> None:
+        self._update_command_dropdown(event.value)
+
+    def _update_command_dropdown(self, text: str) -> None:
+        panel = self.query_one("#command-hint-panel", OptionList)
+        stripped = text.strip()
+        if not stripped.startswith("/"):
+            panel.clear_options()
+            panel.remove_class("visible")
+            panel.add_class("hidden")
+            return
+
+        typed = stripped.split(maxsplit=1)[0].lower()
+        prefix = typed[1:]
+        matches = [
+            (command, description)
+            for command, description in SLASH_COMMAND_OPTIONS
+            if command[1:].startswith(prefix)
+        ]
+
+        if not matches:
+            panel.clear_options()
+            panel.add_option(Option("No command matches", disabled=True))
+            panel.remove_class("hidden")
+            panel.add_class("visible")
+            return
+
+        options = [
+            Option(f"{command}  |  {description}", id=command)
+            for command, description in matches
+        ]
+        panel.clear_options()
+        panel.add_options(options)
+        panel.highlighted = 0 if panel.option_count else None
+        panel.remove_class("hidden")
+        panel.add_class("visible")
+
+    def on_key(self, event: events.Key) -> None:
+        if self.focused is not self.chat_input:
+            return
+
+        panel = self.query_one("#command-hint-panel", OptionList)
+        if panel.has_class("hidden"):
+            return
+
+        if event.key == "up":
+            panel.action_cursor_up()
+            event.stop()
+            event.prevent_default()
+        elif event.key == "down":
+            panel.action_cursor_down()
+            event.stop()
+            event.prevent_default()
+        elif event.key == "tab":
+            highlighted = panel.highlighted
+            if highlighted is None:
+                return
+            selected = panel.get_option_at_index(highlighted)
+            if selected.disabled or not selected.id:
+                return
+
+            self.chat_input.value = f"{selected.id} "
+            self._update_command_dropdown(self.chat_input.value)
+            self.chat_input.focus()
+            event.stop()
+            event.prevent_default()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if event.option_list.id != "command-hint-panel":
+            return
+
+        selected = event.option.id
+        if not selected:
+            return
+
+        self.chat_input.value = f"{selected} "
+        self._update_command_dropdown(self.chat_input.value)
+        self.chat_input.focus()
+
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
         if not text or self._is_busy:
             return
 
         self.chat_input.value = ""
+        self._update_command_dropdown("")
 
         # Check for Slash Commands
         if text.startswith("/"):
@@ -327,8 +431,9 @@ class CodeIqApp(App):
 - **`/exit`** or **`/quit`**: Exit and close the CodeIq TUI
 - **`/clear`**: Clear current chat screen
 - **`/sessions`** or **`/resume`**: Open session history manager
-- **`/model <name>`**: Switch model (e.g. `/model gemini-2.5-pro` or `/model gpt-4o`)
-- **`/provider <name>`**: Switch provider (`gemini`, `openai`, `groq`, `ollama`)
+- **`/provider <name>`**: Switch provider (`gemini`, `openai`, `anthropic`, `groq`, `ollama`)
+- **`/model <name>`**: Switch model for current provider
+- **`/models`**: List all providers and model catalogs
 - **`/git`**: Inspect current Git repository status
 - **`/diff`**: View unstaged/staged Git diff
 - **`/files`**: Toggle project directory explorer sidebar
@@ -356,28 +461,54 @@ class CodeIqApp(App):
         elif name == "/model":
             if arg:
                 self.session.model = arg
+                self.config.model = arg
+                self.config.add_model_for_provider(self.session.provider, arg)
+                self.config.save_project_config()
                 self.agent.switch_model(self.session.provider, arg)
                 self.status_bar.update_metrics(
                     tokens=self.session.total_tokens,
                     model=arg,
                     provider=self.session.provider,
                 )
-                self._append_system_notice(f"Switched model to **{arg}**.")
+                self._append_system_notice(
+                    f"Switched model to **{arg}** for provider **{self.session.provider}**."
+                )
             else:
                 self.action_open_settings()
 
         elif name == "/provider":
             if arg:
+                if arg not in SUPPORTED_PROVIDERS:
+                    available = ", ".join(SUPPORTED_PROVIDERS)
+                    self._append_system_notice(f"Unknown provider `{arg}`. Available: {available}.")
+                    return
                 self.session.provider = arg
+                self.config.provider = arg
+                provider_models = self.config.get_models_for_provider(arg)
+                if self.session.model not in provider_models and provider_models:
+                    self.session.model = provider_models[0]
+                self.config.model = self.session.model
+                self.config.save_project_config()
                 self.agent.switch_model(arg, self.session.model)
                 self.status_bar.update_metrics(
                     tokens=self.session.total_tokens,
                     model=self.session.model,
                     provider=arg,
                 )
-                self._append_system_notice(f"Switched provider to **{arg}**.")
+                self._append_system_notice(
+                    f"Switched provider to **{arg}** with model **{self.session.model}**."
+                )
             else:
                 self.action_open_settings()
+
+        elif name == "/models":
+            lines = ["### 🧠 Provider Model Catalog:"]
+            for provider, models in self.config.provider_models.items():
+                marker = " (active)" if provider == self.session.provider else ""
+                rendered = ", ".join(f"`{provider} | {m}`" for m in models[:12])
+                lines.append(f"- **{provider}**{marker}: {rendered if rendered else '_No models configured_'}")
+            lines.append("- Use `/provider <name>` then `/model <name>` to switch quickly.")
+            self._append_system_notice("\n".join(lines))
 
         elif name == "/git":
             out = git_status(self.cwd)

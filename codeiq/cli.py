@@ -33,7 +33,7 @@ def main() -> None:
         "--provider", "-p",
         type=str,
         default=None,
-        choices=["gemini", "openai", "groq", "ollama"],
+        choices=["gemini", "openai", "anthropic", "groq", "ollama"],
         help="LLM provider (default: gemini)",
     )
     parser.add_argument(
@@ -111,6 +111,10 @@ def main() -> None:
     if args.api_key:
         if args.provider == "openai":
             os.environ["OPENAI_API_KEY"] = args.api_key
+        elif args.provider == "anthropic":
+            os.environ["ANTHROPIC_API_KEY"] = args.api_key
+        elif args.provider == "groq":
+            os.environ["GROQ_API_KEY"] = args.api_key
         else:
             os.environ["GEMINI_API_KEY"] = args.api_key
 

@@ -11,6 +11,7 @@ setup(
         "rich>=13.7.0",
         "google-genai>=1.0.0",
         "openai>=1.20.0",
+        "anthropic>=0.40.0",
         "pydantic>=2.0.0",
     ],
     entry_points={

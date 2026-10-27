@@ -1,0 +1,22 @@
+[project]
+name = "codeiq-dev"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Dharma-Teja-22", email = "dharmateja0202@gmail.com" }
+]
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=3.38.0",
+    "python-dotenv>=1.2.4",
+    "rich>=15.0.0",
+    "typer[all]>=0.27.3",
+]
+
+[project.scripts]
+codeiq = "codeiq_dev.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.12.15,<0.13.0"]
+build-backend = "uv_build"

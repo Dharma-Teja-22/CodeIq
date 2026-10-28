@@ -5,6 +5,7 @@ import os
 import typer
 from rich.console import Console
 import subprocess
+from rich.text import Text
 
 load_dotenv()
 app = typer.Typer()
@@ -34,6 +35,34 @@ def generate_response(prompt: str):
         )
 
     console.print(response.choices[0].message.content, style="green")
+
+# Generate response from AI model in a chat mode - Loop
+@app.command()
+def chat():
+    """
+    Generates a response from the AI model based on the given prompt.
+    Usage:
+        codeiq chat
+    Args:
+        prompt (str): The prompt to send to the AI model.
+    Format:
+        User: <Question>
+        Assistant: <Response from AI>
+        ...
+    """
+    while True:
+        prompt_text = typer.style("User", fg=typer.colors.CYAN, bold=True)
+        prompt = typer.prompt(prompt_text)
+        if prompt.lower() in ('exit','quit'):
+            break
+        with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc"):
+            response = client.chat.completions.create(
+                model="gemini-3.5-flash-lite",
+                messages=[{"role": "user", "content": prompt}],
+        )
+        assistant = Text("Assistant:", style="bold cyan")
+        message = Text(response.choices[0].message.content, style="green")
+        console.print(assistant, message)
 
 # Git Commands
 @app.command()

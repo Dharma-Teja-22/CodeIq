@@ -116,6 +116,14 @@ def commit():
     else:
         typer.echo("Commit cancelled.")
 
+@app.command()
+def git(type: str = typer.Option(..., "--type", help="Git operation: add, push, pull, branch"),file_name: str = typer.Option(".", "--file-name")):
+    if type.lower() not in ["add", "push", "pull", "branch"]:
+        typer.echo("Invalid Git operation type. Use: add, push, pull, branch")
+        raise typer.Exit(code=1)
+    with console.status(f"[bold cyan]Performing Git {type}...[/bold cyan]",spinner="arc"):
+        result = gitOperation(type.lower(),file_name)
+        console.print(result, style="green")
 
 if __name__ == "__main__":
     app()

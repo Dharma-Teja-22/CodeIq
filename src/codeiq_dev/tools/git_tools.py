@@ -16,21 +16,21 @@ def gitCommit(message: str):
     else:
         return f"Failed to commit files to the Git repository"
 
-# def gitPush(branch_name: str):
-#     '''Push to a branch'''
-#     result = subprocess.run(["git", "push", "origin", branch_name], capture_output=True, text=True)
-#     if result.returncode == 0:
-#         return f"Pushed to branch: {branch_name}"
-#     else:
-#         return f"Failed to push to branch"
+def gitPush(branch_name: str):
+    '''Push to a branch'''
+    result = subprocess.run(["git", "push", "origin", branch_name], capture_output=True, text=True)
+    if result.returncode == 0:
+        return f"Pushed to branch: {branch_name}"
+    else:
+        return f"Failed to push to branch"
 
-# def gitPull(branch_name: str):
-#     '''Pull from a branch'''
-#     result = subprocess.run(["git", "pull", "origin", branch_name], capture_output=True, text=True)
-#     if result.returncode == 0:
-#         return f"Pulled from branch: {branch_name}"
-#     else:
-#         return f"Failed to pull from branch"
+def gitPull(branch_name: str):
+    '''Pull from a branch'''
+    result = subprocess.run(["git", "pull", "origin", branch_name], capture_output=True, text=True)
+    if result.returncode == 0:
+        return f"Pulled from branch: {branch_name}"
+    else:
+        return f"Failed to pull from branch"
 
 def getBranch():
     '''Get Current Branch Name'''
@@ -39,3 +39,21 @@ def getBranch():
         return result.stdout.strip()
     else:
         return f"Failed to get branch name"
+
+def gitOperation(operation: str, file_name: str = "."):
+    if operation == "add":
+        return gitAdd(file_name)
+
+    elif operation == "push":
+        branch_name = getBranch()
+        return gitPush(branch_name)
+
+    elif operation == "pull":
+        branch_name = getBranch()
+        return gitPull(branch_name)
+
+    elif operation == "branch":
+        return getBranch()
+
+    else:
+        return f"Unsupported Git operation: {operation}"

@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 import os
 import typer
 from rich.console import Console
-import subprocess
 from rich.text import Text
 import json
 
@@ -77,17 +76,18 @@ def chat():
             {
                 "role": "system",
                 "content": (
-                    "You are CodeIq, an AI coding assistant that performs Git operations. Always choose the correct operation based on the user's request. Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. Example: If user asks to add and commit, call add tool first and then commit tool."
+                    "You are CodeIq, an AI coding assistant that performs Git operations. Always choose the correct operation based on the user's request. Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. Example: If user asks to add and commit, call add tool first and then commit tool. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
                 ),
             },
             {"role": "user", "content": prompt},
         ]
 
+        status_text = "Thinking..."
         # Inner loop handles all tool-calling rounds for this question.
         while True:
             try:
                 with console.status(
-                    "[bold cyan]Thinking...[/bold cyan]",
+                    f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
                 ):
                     response = client.chat.completions.create(
@@ -99,10 +99,14 @@ def chat():
                 assistant_message = response.choices[0].message
                 # No more tool calls: display the final response.
                 if not assistant_message.tool_calls:
-                    console.print(
-                        Text("Assistant:", style="bold cyan"),
-                        Text(assistant_message.content or "", style="green"),
-                    )
+                    content = (assistant_message.content or "").strip()
+                    if not content and status_text != "Thinking...":
+                        content = "Done."
+                    if content:
+                        console.print(
+                            Text("Assistant:", style="bold cyan"),
+                            Text(content, style="green"),
+                        )
                     break
 
                 # Preserve the assistant's tool-call message.
@@ -183,6 +187,8 @@ def chat():
 
                     console.print(f"[yellow]Git result:[/yellow] {result}")
                     messages.append({"role": "tool","tool_call_id": tool_call.id,"content": str(result),})
+
+                status_text = "Processing response..."
 
             except Exception as exc:
                 console.print(f"[bold red]Error:[/bold red] {exc}")

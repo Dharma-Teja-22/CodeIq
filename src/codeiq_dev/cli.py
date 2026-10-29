@@ -1,7 +1,10 @@
 from openai.types.beta import beta_computer_action_list
 from codeiq_dev.tools.git_tools import *
+from codeiq_dev.tools.file_tools import findFile
 from openai import OpenAI
 from dotenv import load_dotenv
+from pathlib import Path
+from typing import Optional
 import os
 import typer
 from rich.console import Console
@@ -213,6 +216,27 @@ def generate_response(prompt: str):
         )
 
     console.print(response.choices[0].message.content, style="green")
+
+# Find file dynamically without extension
+@app.command(name="find-file")
+def find_file_cmd(filename: Optional[str] = typer.Argument(None,help="Name of the file to search for. Prompted if not provided."),
+    directory: Optional[str] = typer.Option(None,"--directory","-d",help="Target directory to search. Defaults to current working directory where the command is executed.")):
+    """
+    Search recursively for a file by name matching any extension in the current directory.
+    """
+    target_dir = Path(directory).resolve() if directory else Path.cwd()
+    file_name = filename if filename else typer.prompt("Enter file name (without extension)").strip()
+    if not file_name:
+        console.print("[bold red]Error:[/bold red] File name cannot be empty.")
+        raise typer.Exit(code=1)
+
+    matches = findFile(target_directory=target_dir, filename=file_name)
+    if matches:
+        console.print(f"[bold green]Found {len(matches)} match(es):[/bold green]")
+        for file in matches:
+            console.print(f" - {file.resolve()}")
+    else:
+        console.print("[yellow]No matching files found.[/yellow]")
 
 if __name__ == "__main__":
     app()

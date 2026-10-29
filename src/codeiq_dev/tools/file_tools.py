@@ -29,8 +29,27 @@ def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> Li
             matches.append(path)
     return matches
 
+def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
+    """
+    Find a file by name using findFile and read its content.
+    If multiple matches are found, it reads the first match.
+    """
+    matches = findFile(target_directory=target_directory, filename=filename)
+    if not matches:
+        return f"File '{filename}' not found."
+
+    file_path = matches[0]
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        return f"Error reading file '{file_path}': {e}"
+
 def fileOperation(operation: str, filename: str = "", target_directory: Union[str, Path] = "."):
     """Dispatch file operations."""
     if operation == "find_file":
         return findFile(target_directory=target_directory, filename=filename)
+    elif operation == "read_file":
+        return readFile(filename=filename, target_directory=target_directory)
     return f"Unsupported file operation: {operation}"
+

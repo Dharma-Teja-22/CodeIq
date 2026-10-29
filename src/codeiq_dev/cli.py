@@ -1,6 +1,6 @@
 from openai.types.beta import beta_computer_action_list
 from codeiq_dev.tools.git_tools import *
-from codeiq_dev.tools.file_tools import findFile, readFile, writeFile
+from codeiq_dev.tools.file_tools import findFile, readFile, writeFile, fileOperation
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
@@ -59,13 +59,53 @@ tools = [
                 "required": ["operation"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fileOperations",
+            "description": (
+                "Perform file operations in the project. "
+                "read_file: Read content of a file. "
+                "write_file: Append content or write to a file. "
+                "replace_content: Replace an existing specific block of code in a file with new code. "
+                "find_file: Search for a file by name."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "operation": {
+                        "type": "string",
+                        "enum": ["read_file", "write_file", "replace_content", "find_file"],
+                        "description": "The file operation to perform."
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'app.py')."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Content to write (for write_file)."
+                    },
+                    "old_code": {
+                        "type": "string",
+                        "description": "Exact existing code snippet to be replaced (for replace_content)."
+                    },
+                    "new_code": {
+                        "type": "string",
+                        "description": "New replacement code snippet (for replace_content)."
+                    }
+                },
+                "required": ["operation", "file_path"]
+            }
+        }
     }
 ]
 
 # Generate response from AI model in a chat mode - Loop
 @app.command()
 def chat():
-    """Start an interactive CodeIq chat with Git tools."""
+    """Start an interactive CodeIq chat with Git and File tools."""
     while True:
         prompt = typer.prompt(
             typer.style("User", fg=typer.colors.CYAN, bold=True)
@@ -79,7 +119,9 @@ def chat():
             {
                 "role": "system",
                 "content": (
-                    "You are CodeIq, an AI coding assistant that performs Git operations. Always choose the correct operation based on the user's request. Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. Example: If user asks to add and commit, call add tool first and then commit tool. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
+                    "You are CodeIq, an AI coding assistant that performs Git operations. Always choose the correct operation based on the user's request."
+                    "For File Operations: When asked to modify existing code or add features to a file, always read the file first using read_file to check the exact lines and formatting and then use replace_content to replace teh existing code block with new code including enough surrounding lines in old_code to make it uniquely identifiable. "
+                    "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. Example: If user asks to add and commit, call add tool first and then commit tool. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -118,10 +160,72 @@ def chat():
                 # Execute all tool calls returned in this response.
                 for tool_call in assistant_message.tool_calls:
                     try:
-                        if tool_call.function.name != "gitOperations":
-                            result = (f"Unknown tool: {tool_call.function.name}")
-                        else:
-                            arguments = json.loads(tool_call.function.arguments)
+                        arguments = json.loads(tool_call.function.arguments)
+
+                        if tool_call.function.name == "fileOperations":
+                            operation = arguments.get("operation")
+                            fpath = arguments.get("file_path", "")
+
+                            # If find_file or operation returned multiple files, prompt user to choose
+                            if operation == "find_file":
+                                matches = fileOperation(operation="find_file", file_path=fpath)
+                                if not matches:
+                                    result = f"No files found matching '{fpath}'."
+                                    console.print(f"[yellow]{result}[/yellow]")
+                                elif len(matches) == 1:
+                                    result = f"Found: {matches[0]}"
+                                    console.print(f"[green]{result}[/green]")
+                                else:
+                                    console.print(f"\n[bold yellow]Multiple files found for '{fpath}':[/bold yellow]")
+                                    for idx, match_path in enumerate(matches, 1):
+                                        console.print(f"  [{idx}] {match_path}")
+                                    choice = typer.prompt("Select file number to use", default="1")
+                                    try:
+                                        selected_idx = int(choice) - 1
+                                        selected_path = matches[selected_idx]
+                                    except (ValueError, IndexError):
+                                        selected_path = matches[0]
+                                    result = f"Selected file: {selected_path}"
+                                    console.print(f"[green]Using: {selected_path}[/green]")
+
+                            elif operation == "read_file":
+                                result = fileOperation(operation="read_file", file_path=fpath)
+                                # Avoid dumping hundreds of lines onto the screen
+                                line_count = len(result.splitlines())
+                                console.print(f"[green]Read '{fpath}' ({line_count} lines loaded into context).[/green]")
+
+                            elif operation == "replace_content":
+                                console.print(f"[cyan]Applying code changes to '{fpath}'...[/cyan]")
+                                old_snippet = arguments.get("old_code", "")
+                                new_snippet = arguments.get("new_code", "")
+                                result = fileOperation(
+                                    operation="replace_content",
+                                    file_path=fpath,
+                                    old_code=old_snippet,
+                                    new_code=new_snippet,
+                                )
+                                if result.startswith("Error") or "not found" in result:
+                                    console.print(f"[bold red]{result}[/bold red]")
+                                else:
+                                    console.print(f"[bold cyan]Changes applied to '{fpath}':[/bold cyan]")
+                                    if old_snippet:
+                                        for line in old_snippet.splitlines():
+                                            console.print(f"[bold red]- {line}[/bold red]")
+                                    if new_snippet:
+                                        for line in new_snippet.splitlines():
+                                            console.print(f"[bold green]+ {line}[/bold green]")
+
+                            elif operation == "write_file":
+                                result = fileOperation(
+                                    operation="write_file",
+                                    file_path=fpath,
+                                    content=arguments.get("content", ""),
+                                )
+                                console.print(f"[green]{result}[/green]")
+                            else:
+                                result = f"Unsupported file operation: {operation}"
+
+                        elif tool_call.function.name == "gitOperations":
                             operation = arguments["operation"]
                             console.print(f"[cyan]Executing Git operation: {operation}[/cyan]")
 
@@ -184,11 +288,14 @@ def chat():
 
                             else:
                                 result = gitOperation(operation=operation,file_name=arguments.get("file_name", "."),)
+                            console.print(f"[yellow]Git result:[/yellow] {result}")
+                        else:
+                            result = f"Unknown tool: {tool_call.function.name}"
 
                     except Exception as exc:
                         result = f"Tool execution failed: {exc}"
+                        console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
 
-                    console.print(f"[yellow]Git result:[/yellow] {result}")
                     messages.append({"role": "tool","tool_call_id": tool_call.id,"content": str(result),})
 
                 status_text = "Processing response..."
@@ -217,69 +324,5 @@ def generate_response(prompt: str):
 
     console.print(response.choices[0].message.content, style="green")
 
-# Find file dynamically without extension
-@app.command(name="find-file")
-def find_file_cmd(filename: Optional[str] = typer.Argument(None,help="Name of the file to search for. Prompted if not provided."),
-    directory: Optional[str] = typer.Option(None,"--directory","-d",help="Target directory to search. Defaults to current working directory where the command is executed.")):
-    """
-    Search recursively for a file by name matching any extension in the current directory.
-    """
-    target_dir = Path(directory).resolve() if directory else Path.cwd()
-    file_name = filename if filename else typer.prompt("Enter file name (without extension)").strip()
-    if not file_name:
-        console.print("[bold red]Error:[/bold red] File name cannot be empty.")
-        raise typer.Exit(code=1)
-
-    matches = findFile(target_directory=target_dir, filename=file_name)
-    if matches:
-        console.print(f"[bold green]Found {len(matches)} match(es):[/bold green]")
-        for file in matches:
-            console.print(f" - {file.resolve()}")
-    else:
-        console.print("[yellow]No matching files found.[/yellow]")
-
-# Read file content using findFile
-@app.command(name="read-file")
-def read_file_cmd(
-    filename: Optional[str] = typer.Argument(None, help="Name of the file to read (without extension). Prompted if not provided."),
-    directory: Optional[str] = typer.Option(None, "--directory", "-d", help="Target directory to search. Defaults to current working directory.")
-):
-    """
-    Find a file by name and display its content.
-    """
-    target_dir = Path(directory).resolve() if directory else Path.cwd()
-    file_name = filename if filename else typer.prompt("Enter file name (without extension)").strip()
-    if not file_name:
-        console.print("[bold red]Error:[/bold red] File name cannot be empty.")
-        raise typer.Exit(code=1)
-
-    content = readFile(filename=file_name, target_directory=target_dir)
-    console.print(content)
-
-# Append content to a file using findFile
-@app.command(name="write-file")
-def write_file_cmd(
-    filename: Optional[str] = typer.Argument(None, help="Name of the file to append to (without extension). Prompted if not provided."),
-    content: Optional[str] = typer.Option(None, "--content", "-c", help="Content to append to the file. Prompted if not provided."),
-    directory: Optional[str] = typer.Option(None, "--directory", "-d", help="Target directory to search. Defaults to current working directory.")
-):
-    """
-    Find a file by name and append content to it.
-    """
-    target_dir = Path(directory).resolve() if directory else Path.cwd()
-    file_name = filename if filename else typer.prompt("Enter file name (without extension)").strip()
-    if not file_name:
-        console.print("[bold red]Error:[/bold red] File name cannot be empty.")
-        raise typer.Exit(code=1)
-
-    text_to_write = content if content is not None else typer.prompt("Enter content to append")
-
-    result = writeFile(filename=file_name, content=text_to_write, target_directory=target_dir)
-    if result.startswith("Successfully"):
-        console.print(f"[bold green]{result}[/bold green]")
-    else:
-        console.print(f"[bold red]{result}[/bold red]")
-
 if __name__ == "__main__":
     app()
-

@@ -6,70 +6,135 @@ IGNORE_EXTS = {".pyc", ".pyo", ".pyd"}
 
 def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> List[Path]:
     """
-    Search recursively for a file by name (matching any extension) in the target directory,
-    skipping common ignored directories and binary extensions.
+    Search recursively for a file by name (matching filename with or without extension)
+    in the target directory, skipping common ignored directories.
     """
     search_dir = Path(target_directory).resolve()
     if not search_dir.exists():
         return []
 
+    target_name = Path(filename).name.lower()
+    target_stem = Path(filename).stem.lower()
+
     matches: List[Path] = []
     for path in search_dir.rglob("*"):
-        # Skip if it's a directory
         if path.is_dir():
             continue
-        # Skip if it's in an ignored directory
         if any(ignore_dir in path.parts for ignore_dir in IGNORE_DIRS):
             continue
-        # Skip if it has an ignored extension
         if path.suffix.lower() in IGNORE_EXTS:
             continue
-        # Check if the filename (without extension) matches
-        if path.stem == filename:
+        
+        # Match full filename (e.g. cli.py) or stem (e.g. cli)
+        if path.name.lower() == target_name or path.stem.lower() == target_stem:
             matches.append(path)
     return matches
 
-def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
+def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Path] = ".") -> Union[Path, str, List[Path]]:
     """
-    Find a file by name using findFile and read its content.
-    If multiple matches are found, it reads the first match.
+    Resolves a file path:
+    1. Checks if file_path exists directly (relative or absolute).
+    2. Searches with findFile.
+    3. If multiple matches exist, returns the list so the caller/user can select.
     """
-    matches = findFile(target_directory=target_directory, filename=filename)
-    if not matches:
-        return f"File '{filename}' not found."
+    p = Path(file_path)
+    if p.is_file():
+        return p.resolve()
 
-    file_path = matches[0]
+    matches = findFile(target_directory=target_directory, filename=str(file_path))
+    if not matches:
+        return f"File '{file_path}' not found."
+    if len(matches) == 1:
+        return matches[0]
+    return matches  # Multiple matches found
+
+def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
+    """Find a file and read its content."""
+    resolved = resolveFilePath(filename, target_directory=target_directory)
+    if isinstance(resolved, str):
+        return resolved
+    if isinstance(resolved, list):
+        return f"Multiple files found for '{filename}':\n" + "\n".join(f" - {f}" for f in resolved)
+
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(resolved, "r", encoding="utf-8") as f:
             return f.read()
     except Exception as e:
-        return f"Error reading file '{file_path}': {e}"
+        return f"Error reading file '{resolved}': {e}"
 
-def writeFile(filename: str, content: str, target_directory: Union[str, Path] = ".") -> str:
+def writeFile(filename: str, content: str, mode: str = "w", target_directory: Union[str, Path] = ".") -> str:
     """
-    Find a file by name using findFile and append content to it.
-    If multiple matches are found, it appends to the first match.
+    Write content to a file (default 'w' to overwrite/create, avoiding duplicates).
     """
-    matches = findFile(target_directory=target_directory, filename=filename)
-    if not matches:
-        return f"File '{filename}' not found."
+    resolved = resolveFilePath(filename, target_directory=target_directory)
+    if isinstance(resolved, list):
+        resolved = resolved[0]
+    elif isinstance(resolved, str) and "not found" in resolved:
+        resolved = (Path(target_directory).resolve() / filename).resolve()
 
-    file_path = matches[0]
     try:
-        with open(file_path, "a", encoding="utf-8") as f:
+        resolved.parent.mkdir(parents=True, exist_ok=True)
+        with open(resolved, mode, encoding="utf-8") as f:
             f.write(content)
-        return f"Successfully appended content to '{file_path}'."
+        return f"Successfully wrote to '{resolved}'."
     except Exception as e:
-        return f"Error writing to file '{file_path}': {e}"
+        return f"Error writing to file '{resolved}': {e}"
 
-def fileOperation(operation: str, filename: str = "", content: str = "", target_directory: Union[str, Path] = "."):
+def replaceInFile(file_path: Union[str, Path], old_code: str, new_code: str, target_directory: Union[str, Path] = ".") -> str:
+    """
+    Finds the file and replaces an existing code block with new code.
+    Returns only the snippet of change rather than full file.
+    """
+    resolved = resolveFilePath(file_path, target_directory=target_directory)
+    if isinstance(resolved, str):
+        return resolved
+    if isinstance(resolved, list):
+        return f"Multiple files found for '{file_path}':\n" + "\n".join(f" - {f}" for f in resolved)
+
+    try:
+        with open(resolved, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        if old_code not in content:
+            return f"Error: Target code block not found in '{resolved.name}'. Check indentation and lines."
+
+        if content.count(old_code) > 1:
+            return f"Error: Target code block appears {content.count(old_code)} times in '{resolved.name}'. Include more context."
+
+        new_content = content.replace(old_code, new_code, 1)
+
+        with open(resolved, "w", encoding="utf-8") as f:
+            f.write(new_content)
+
+        # Return snippet preview rather than entire file
+        old_preview = "\n".join(f"- {line}" for line in old_code.strip().splitlines()[:5])
+        new_preview = "\n".join(f"+ {line}" for line in new_code.strip().splitlines()[:5])
+        return f"Successfully updated '{resolved.name}':\n{old_preview}\n{new_preview}"
+    except Exception as e:
+        return f"Error updating '{resolved}': {e}"
+
+def fileOperation(
+    operation: str,
+    filename: str = "",
+    file_path: Union[str, Path] = "",
+    content: str = "",
+    old_code: str = "",
+    new_code: str = "",
+    target_directory: Union[str, Path] = "."
+):
     """Dispatch file operations."""
+    path_to_use = file_path or filename
+
     if operation == "find_file":
-        return findFile(target_directory=target_directory, filename=filename)
+        matches = findFile(target_directory=target_directory, filename=str(path_to_use))
+        return [str(p) for p in matches]
     elif operation == "read_file":
-        return readFile(filename=filename, target_directory=target_directory)
+        return readFile(filename=str(path_to_use), target_directory=target_directory)
     elif operation == "write_file":
-        return writeFile(filename=filename, content=content, target_directory=target_directory)
+        return writeFile(filename=str(path_to_use), content=content, target_directory=target_directory)
+    elif operation == "replace_content":
+        return replaceInFile(file_path=path_to_use, old_code=old_code, new_code=new_code, target_directory=target_directory)
     return f"Unsupported file operation: {operation}"
+
 
 

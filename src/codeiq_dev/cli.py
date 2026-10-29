@@ -1,6 +1,6 @@
 from openai.types.beta import beta_computer_action_list
 from codeiq_dev.tools.git_tools import *
-from codeiq_dev.tools.file_tools import findFile, readFile
+from codeiq_dev.tools.file_tools import findFile, readFile, writeFile
 from openai import OpenAI
 from dotenv import load_dotenv
 from pathlib import Path
@@ -256,5 +256,30 @@ def read_file_cmd(
     content = readFile(filename=file_name, target_directory=target_dir)
     console.print(content)
 
+# Append content to a file using findFile
+@app.command(name="write-file")
+def write_file_cmd(
+    filename: Optional[str] = typer.Argument(None, help="Name of the file to append to (without extension). Prompted if not provided."),
+    content: Optional[str] = typer.Option(None, "--content", "-c", help="Content to append to the file. Prompted if not provided."),
+    directory: Optional[str] = typer.Option(None, "--directory", "-d", help="Target directory to search. Defaults to current working directory.")
+):
+    """
+    Find a file by name and append content to it.
+    """
+    target_dir = Path(directory).resolve() if directory else Path.cwd()
+    file_name = filename if filename else typer.prompt("Enter file name (without extension)").strip()
+    if not file_name:
+        console.print("[bold red]Error:[/bold red] File name cannot be empty.")
+        raise typer.Exit(code=1)
+
+    text_to_write = content if content is not None else typer.prompt("Enter content to append")
+
+    result = writeFile(filename=file_name, content=text_to_write, target_directory=target_dir)
+    if result.startswith("Successfully"):
+        console.print(f"[bold green]{result}[/bold green]")
+    else:
+        console.print(f"[bold red]{result}[/bold red]")
+
 if __name__ == "__main__":
     app()
+

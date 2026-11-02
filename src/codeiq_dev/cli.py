@@ -1,6 +1,7 @@
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
 import asyncio
+import sys
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import os
@@ -12,6 +13,10 @@ import json
 load_dotenv()
 app = typer.Typer()
 console = Console()
+
+# On Windows, silence the known Proactor transport __del__ bug on loop close
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 client = AsyncOpenAI(
     api_key=os.getenv("GEMINI_API_KEY"),
@@ -109,7 +114,7 @@ async def _chat():
             typer.style("User", fg=typer.colors.CYAN, bold=True),
         )
 
-        if prompt.strip().lower() in ("exit", "quit"):
+        if prompt.strip().lower() in ("exit", "quit","bye","close"):
             console.print("[yellow]Chat ended.[/yellow]")
             break
 
@@ -335,7 +340,13 @@ async def _chat():
 @app.command()
 def chat():
     """Start an interactive CodeIq chat with Git and File tools."""
-    asyncio.run(_chat())
+    async def runner():
+        try:
+            await _chat()
+        finally:
+            # pyrefly: ignore[not-async]
+            await client.close()
+    asyncio.run(runner())
 
 async def _generate_response(prompt: str):
     typer.echo(f"\nQ: {prompt}")

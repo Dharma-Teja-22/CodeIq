@@ -103,6 +103,25 @@ tools = [
                 "required": ["operation", "file_path"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "executeTool",
+            "description": (
+                "Execute a single short-running, non-interactive terminal command in the user's project environment. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes, including development servers, production servers, file watchers, monitoring utilities, interactive shells, REPL sessions, or commands that wait indefinitely for input. Examples of prohibited commands include npm start, npm run dev, yarn dev, pnpm dev, vite, nodemon, next dev, uvicorn, gunicorn, flask run, streamlit run, watch, top, htop, and tail -f. Never bypass these restrictions through command chaining, shell wrappers, or background execution. If the requested operation requires a continuous or long-running process, inform the user that it is not supported instead of invoking this tool. Execute only commands directly related to the user's request, enforce the configured execution timeout, and report the execution result clearly. If execution fails or times out, communicate the error without automatically retrying. Keep the returned output concise and limit it to approximately 350 characters, clearly indicating when the output has been truncated."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "The exact, complete terminal command that needs to be executed. Provide only one short-running, non-interactive command that is directly relevant to the user's request and is expected to complete within the configured timeout. Do not include explanations, Markdown formatting, or additional instructions. Avoid destructive or irreversible operations unless explicitly authorized. Do not provide commands that start servers, background processes, watchers, monitoring utilities, interactive shells, REPL sessions, infinite loops, or processes that require continuous execution. Do not chain multiple commands using &&, ||, ;, pipes, or shell wrappers to bypass execution restrictions. The command must be suitable for execution in the user's project environment and must be presented to the user for explicit approval before execution."
+                    }
+                },
+                "required": ["command"]
+            }
+        }
     }
 ]
 
@@ -123,9 +142,12 @@ async def _chat():
             {
                 "role": "system",
                 "content": (
-                    "You are CodeIq, an AI coding assistant that performs Git operations. Always choose the correct operation based on the user's request."
+                    "You are CodeIq, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
                     "For File Operations: When asked to modify existing code or add features to a file, always read the file first using read_file to check the exact lines and formatting and then use replace_content to replace teh existing code block with new code including enough surrounding lines in old_code to make it uniquely identifiable. "
-                    "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. Example: If user asks to add and commit, call add tool first and then commit tool. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
+                    "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
+                    "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
+                    "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information like IP address, status, or confirmation of action politely). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted."
+                    "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -317,6 +339,21 @@ async def _chat():
                                     file_name=arguments.get("file_name", "."),
                                 )
                             console.print(f"[yellow]Git result:[/yellow] {result}")
+                        elif tool_call.function.name == "executeTool":
+                            command = arguments.get("command", "")
+                            console.print(f"[cyan]Executing Command Tool:[/cyan] {command}")
+                            result = await asyncio.to_thread(
+                                executeTool,
+                                command=command,
+                                ask_confirm=True,
+                            )
+                            if "cancelled by user" in result.lower():
+                                console.print("[yellow]Command execution was cancelled by the user.[/yellow]")
+                                cancelled = True
+                            elif result.startswith("Error") or result.startswith("Execution rejected") or "failed" in result.lower():
+                                console.print("[red]Command finished with an error or rejection.[/red]")
+                            else:
+                                console.print("[green]Command executed successfully.[/green]")
                         else:
                             result = f"Unknown tool: {tool_call.function.name}"
 
@@ -370,18 +407,6 @@ def generate_response(prompt: str):
         prompt (str): The prompt to send to the AI model.
     """
     asyncio.run(_generate_response(prompt))
-
-@app.command(name="execute")
-def execute(
-    command: str = typer.Argument(..., help="The shell command to execute (short-running only)."),
-    timeout: int = typer.Option(30, "--timeout", "-t", help="Timeout in seconds for execution."),
-):
-    """
-    Execute a short-running, non-continuous command.
-    Prompts for user confirmation before running and truncates output to ~350 characters.
-    """
-    result = executeTool(command=command, timeout=timeout, ask_confirm=True)
-    console.print(f"\n[bold green]Output:[/bold green]\n{result}")
 
 if __name__ == "__main__":
     app()

@@ -1,7 +1,9 @@
 import subprocess
 import shlex # Splits shell commands into individual arguments safely for inspection.
+from pathlib import Path
 import typer
 from rich.console import Console
+from codeiq_dev.tools.file_tools import findFile
 
 console = Console()
 
@@ -91,6 +93,21 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
             f"Execution rejected: '{cmd}' is a long-running, continuous, or interactive command. "
             "executeTool only supports short-running commands."
         )
+
+    # Automatically resolve script path if user executes e.g. 'python cli.py' from root directory
+    try:
+        parts = shlex.split(cmd)
+        if len(parts) >= 2 and parts[0].lower() in {"python", "python3", "py"}:
+            script_candidate = Path(parts[1])
+            if not script_candidate.exists() and not script_candidate.is_absolute():
+                matches = findFile(target_directory=".", filename=str(script_candidate))
+                if matches:
+                    resolved_script = str(matches[0])
+                    # Reconstruct command with resolved script path
+                    parts[1] = f'"{resolved_script}"' if " " in resolved_script else resolved_script
+                    cmd = " ".join(parts)
+    except Exception:
+        pass
 
     # Ask user confirmation before executing
     if ask_confirm:

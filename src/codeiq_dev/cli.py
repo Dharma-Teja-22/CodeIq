@@ -1,5 +1,6 @@
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
+from codeiq_dev.tools.miscellaneous_tools import executeTool
 import asyncio
 import sys
 from openai import AsyncOpenAI
@@ -369,6 +370,18 @@ def generate_response(prompt: str):
         prompt (str): The prompt to send to the AI model.
     """
     asyncio.run(_generate_response(prompt))
+
+@app.command(name="execute")
+def execute(
+    command: str = typer.Argument(..., help="The shell command to execute (short-running only)."),
+    timeout: int = typer.Option(30, "--timeout", "-t", help="Timeout in seconds for execution."),
+):
+    """
+    Execute a short-running, non-continuous command.
+    Prompts for user confirmation before running and truncates output to ~350 characters.
+    """
+    result = executeTool(command=command, timeout=timeout, ask_confirm=True)
+    console.print(f"\n[bold green]Output:[/bold green]\n{result}")
 
 if __name__ == "__main__":
     app()

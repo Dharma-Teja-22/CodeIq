@@ -1,10 +1,8 @@
-from openai.types.beta import beta_computer_action_list
 from codeiq_dev.tools.git_tools import *
-from codeiq_dev.tools.file_tools import findFile, readFile, writeFile, fileOperation
-from openai import OpenAI
+from codeiq_dev.tools.file_tools import fileOperation
+import asyncio
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
-from pathlib import Path
-from typing import Optional
 import os
 import typer
 from rich.console import Console
@@ -15,7 +13,7 @@ load_dotenv()
 app = typer.Typer()
 console = Console()
 
-client = OpenAI(
+client = AsyncOpenAI(
     api_key=os.getenv("GEMINI_API_KEY"),
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
 )
@@ -102,13 +100,13 @@ tools = [
     }
 ]
 
-# Generate response from AI model in a chat mode - Loop
-@app.command()
-def chat():
-    """Start an interactive CodeIq chat with Git and File tools."""
+# Async chat implementation
+async def _chat():
+    """Interactive CodeIq chat with Git and File tools using asyncio."""
     while True:
-        prompt = typer.prompt(
-            typer.style("User", fg=typer.colors.CYAN, bold=True)
+        prompt = await asyncio.to_thread(
+            typer.prompt,
+            typer.style("User", fg=typer.colors.CYAN, bold=True),
         )
 
         if prompt.strip().lower() in ("exit", "quit"):
@@ -135,7 +133,7 @@ def chat():
                     f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
                 ):
-                    response = client.chat.completions.create(
+                    response = await client.chat.completions.create(
                         model="gemini-3.5-flash-lite",
                         messages=messages,
                         tools=tools,
@@ -157,6 +155,8 @@ def chat():
                 # Preserve the assistant's tool-call message.
                 messages.append(assistant_message.model_dump(exclude_none=True))
 
+                cancelled = False
+
                 # Execute all tool calls returned in this response.
                 for tool_call in assistant_message.tool_calls:
                     try:
@@ -168,7 +168,9 @@ def chat():
 
                             # If find_file or operation returned multiple files, prompt user to choose
                             if operation == "find_file":
-                                matches = fileOperation(operation="find_file", file_path=fpath)
+                                matches = await asyncio.to_thread(
+                                    fileOperation, operation="find_file", file_path=fpath
+                                )
                                 if not matches:
                                     result = f"No files found matching '{fpath}'."
                                     console.print(f"[yellow]{result}[/yellow]")
@@ -179,7 +181,9 @@ def chat():
                                     console.print(f"\n[bold yellow]Multiple files found for '{fpath}':[/bold yellow]")
                                     for idx, match_path in enumerate(matches, 1):
                                         console.print(f"  [{idx}] {match_path}")
-                                    choice = typer.prompt("Select file number to use", default="1")
+                                    choice = await asyncio.to_thread(
+                                        typer.prompt, "Select file number to use", default="1"
+                                    )
                                     try:
                                         selected_idx = int(choice) - 1
                                         selected_path = matches[selected_idx]
@@ -189,7 +193,9 @@ def chat():
                                     console.print(f"[green]Using: {selected_path}[/green]")
 
                             elif operation == "read_file":
-                                result = fileOperation(operation="read_file", file_path=fpath)
+                                result = await asyncio.to_thread(
+                                    fileOperation, operation="read_file", file_path=fpath
+                                )
                                 # Avoid dumping hundreds of lines onto the screen
                                 line_count = len(result.splitlines())
                                 console.print(f"[green]Read '{fpath}' ({line_count} lines loaded into context).[/green]")
@@ -198,7 +204,8 @@ def chat():
                                 console.print(f"[cyan]Applying code changes to '{fpath}'...[/cyan]")
                                 old_snippet = arguments.get("old_code", "")
                                 new_snippet = arguments.get("new_code", "")
-                                result = fileOperation(
+                                result = await asyncio.to_thread(
+                                    fileOperation,
                                     operation="replace_content",
                                     file_path=fpath,
                                     old_code=old_snippet,
@@ -216,7 +223,8 @@ def chat():
                                             console.print(f"[bold green]+ {line}[/bold green]")
 
                             elif operation == "write_file":
-                                result = fileOperation(
+                                result = await asyncio.to_thread(
+                                    fileOperation,
                                     operation="write_file",
                                     file_path=fpath,
                                     content=arguments.get("content", ""),
@@ -230,7 +238,7 @@ def chat():
                             console.print(f"[cyan]Executing Git operation: {operation}[/cyan]")
 
                             if operation.lower() == "commit":
-                                diff = gitDiff()
+                                diff = await asyncio.to_thread(gitDiff)
                                 if not diff or diff.startswith("Failed to get the diff"):
                                     result = diff or "No staged changes found."
                                 else:
@@ -260,8 +268,9 @@ def chat():
                                                 Staged changes:
                                                 {limited_diff}
                                             '''
-                                    with console.status("[bold cyan]Generating commit message...[/bold cyan]",spinner="arc",):
-                                        response = client.chat.completions.create(
+                                    with console.status("[bold cyan]Generating commit message...[/bold cyan]", spinner="arc"):
+                                        # pyrefly: ignore[not-async]
+                                        response = await client.chat.completions.create(
                                             model="gemini-3.5-flash-lite",
                                             messages=[
                                                 {
@@ -280,14 +289,27 @@ def chat():
                                         result = "Failed to generate a commit message."
                                     else:
                                         console.print(f"\n[bold]Generated Commit Message:[/bold] {commit_message}")
-                                        if typer.confirm("Do you want to commit with this message?",default=False,):
-                                            result = gitOperation(operation="commit",commit_message=commit_message,
+                                        confirmed = await asyncio.to_thread(
+                                            typer.confirm,
+                                            "Do you want to commit with this message?",
+                                            default=False,
+                                        )
+                                        if confirmed:
+                                            result = await asyncio.to_thread(
+                                                gitOperation,
+                                                operation="commit",
+                                                commit_message=commit_message,
                                             )
                                         else:
                                             result = "Commit cancelled. No commit was created."
+                                            cancelled = True
 
                             else:
-                                result = gitOperation(operation=operation,file_name=arguments.get("file_name", "."),)
+                                result = await asyncio.to_thread(
+                                    gitOperation,
+                                    operation=operation,
+                                    file_name=arguments.get("file_name", "."),
+                                )
                             console.print(f"[yellow]Git result:[/yellow] {result}")
                         else:
                             result = f"Unknown tool: {tool_call.function.name}"
@@ -296,13 +318,34 @@ def chat():
                         result = f"Tool execution failed: {exc}"
                         console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
 
-                    messages.append({"role": "tool","tool_call_id": tool_call.id,"content": str(result),})
+                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
+
+                    if cancelled:
+                        break
+
+                if cancelled:
+                    break
 
                 status_text = "Processing response..."
 
             except Exception as exc:
                 console.print(f"[bold red]Error:[/bold red] {exc}")
                 break
+
+@app.command()
+def chat():
+    """Start an interactive CodeIq chat with Git and File tools."""
+    asyncio.run(_chat())
+
+async def _generate_response(prompt: str):
+    typer.echo(f"\nQ: {prompt}")
+    with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc"):
+        # pyrefly: ignore[not-async]
+        response = await client.chat.completions.create(
+            model="gemini-3.5-flash-lite",
+            messages=[{"role": "user", "content": prompt}],
+        )
+    console.print(response.choices[0].message.content, style="green")
 
 # Generate response from AI model
 @app.command()
@@ -314,15 +357,7 @@ def generate_response(prompt: str):
     Args:
         prompt (str): The prompt to send to the AI model.
     """
-    typer.echo(f"\nQ: {prompt}")
-    
-    with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc"):
-        response = client.chat.completions.create(
-            model="gemini-3.5-flash-lite",
-            messages=[{"role": "user", "content": prompt}],
-        )
-
-    console.print(response.choices[0].message.content, style="green")
+    asyncio.run(_generate_response(prompt))
 
 if __name__ == "__main__":
     app()

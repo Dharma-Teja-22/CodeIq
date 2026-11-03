@@ -94,6 +94,14 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
             "executeTool only supports short-running commands."
         )
 
+    # Protect .env files from being inspected or dumped via terminal commands (cat, type, echo, grep, etc.)
+    cmd_lower = cmd.lower()
+    if any(env_token in cmd_lower for env_token in (".env", ".env.", "env.local", "env.production")):
+        # Check if it targets reading or displaying the env file
+        for inspect_cmd in ("cat", "type", "Get-Content", "gc", "more", "head", "tail", "grep", "findstr"):
+            if inspect_cmd.lower() in cmd_lower:
+                return "Execution rejected: Accessing or displaying .env and sensitive environment files is strictly restricted."
+
     # Automatically resolve script path if user executes e.g. 'python cli.py' from root directory
     try:
         parts = shlex.split(cmd)

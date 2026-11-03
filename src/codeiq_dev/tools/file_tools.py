@@ -30,6 +30,14 @@ def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> Li
             matches.append(path)
     return matches
 
+PROTECTED_FILES = {".env", ".env.local", ".env.production", ".env.development", ".env.test"}
+
+def is_protected_file(path_or_name: Union[str, Path]) -> bool:
+    """Check if the target filename is a protected sensitive file (e.g. .env)."""
+    p = Path(path_or_name)
+    name = p.name.lower()
+    return name in PROTECTED_FILES or name.startswith(".env.") or name.endswith(".env")
+
 def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Path] = ".") -> Union[Path, str, List[Path]]:
     """
     Resolves a file path:
@@ -37,6 +45,9 @@ def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Pa
     2. Searches with findFile.
     3. If multiple matches exist, returns the list so the caller/user can select.
     """
+    if is_protected_file(file_path):
+        return "Access denied: Reading or modifying .env and sensitive environment files is strictly restricted."
+
     p = Path(file_path)
     if p.is_file():
         return p.resolve()
@@ -50,6 +61,9 @@ def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Pa
 
 def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
     """Find a file and read its content."""
+    if is_protected_file(filename):
+        return "Access denied: Reading .env and sensitive environment files is strictly prohibited for security reasons."
+
     resolved = resolveFilePath(filename, target_directory=target_directory)
     if isinstance(resolved, str):
         return resolved

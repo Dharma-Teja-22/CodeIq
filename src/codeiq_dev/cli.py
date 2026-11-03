@@ -15,66 +15,26 @@ import json
 
 import msvcrt
 
+# Ensure standard output uses UTF-8 on Windows
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 load_dotenv()
 app = typer.Typer()
 console = Console()
 
-# 5 supported models
-AVAILABLE_MODELS = [
-    "gemini-flash-latest",
-    "gemini-3.1-pro-preview",
-    "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
-    "gemini-3.8-flash",
-]
+from typing import Optional
 
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
-CONFIG_FILE = Path(".codeiq_config.json")
-
-
-def get_selected_model() -> str:
-    """
-    Retrieve currently selected model ID.
-    Priority:
-    1. Session environment variable `MODEL` (e.g. set MODEL=... or $env:MODEL=...)
-    2. Persisted config file (`.codeiq_config.json`)
-    3. Default fallback model (`DEFAULT_MODEL`)
-    """
-    # 1. Environment variable for the current terminal session
-    env_model = os.getenv("MODEL")
-    if env_model:
-        # Strip potential surrounding quotes from shells (e.g. 'model' or "model")
-        cleaned_env_model = env_model.strip().strip("'").strip('"')
-        if cleaned_env_model in AVAILABLE_MODELS:
-            return cleaned_env_model
-
-    # 2. Persisted configuration file
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                configured = data.get("model")
-                if configured and configured in AVAILABLE_MODELS:
-                    return configured
-        except Exception:
-            pass
-
-    # 3. Default fallback
-    return DEFAULT_MODEL
-
-
-def set_selected_model(model_name: str) -> None:
-    """Save selected model to config file."""
-    data = {}
-    if CONFIG_FILE.exists():
-        try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except Exception:
-            data = {}
-    data["model"] = model_name
-    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+from codeiq_dev.config import (
+    add_model_to_config,
+    get_available_models,
+    get_selected_model,
+    set_selected_model,
+)
 
 
 def select_model_interactive(options: list[str], default_option: str) -> str:
@@ -572,16 +532,38 @@ def generate_response(prompt: str):
     asyncio.run(_generate_response(prompt))
 
 @app.command(name="models")
-def models():
+def models(
+    add: Optional[str] = typer.Option(
+        None,
+        "--add",
+        "-a",
+        help="Add a new model to the Gemini provider configuration.",
+    ),
+):
     """
-    Select an AI model interactively using arrow keys (like npm create vite).
+    Select an AI model interactively or add a new model for the Gemini provider.
     Usage:
         codeiq models
+        codeiq models --add <modelName>
     """
-    current_model = get_selected_model()
+    if add:
+        model_name = add.strip().strip("'").strip('"')
+        if not model_name:
+            console.print("[bold red]Error:[/bold red] Model name cannot be empty.")
+            return
+
+        added = add_model_to_config(model_name, provider="gemini")
+        if added:
+            console.print(f"[bold green]✓ Added model '{model_name}' under Gemini provider in JSON.[/bold green]")
+        else:
+            console.print(f"[dim]Model '{model_name}' already exists under Gemini provider.[/dim]")
+        return
+
+    available_models = get_available_models(provider="gemini")
+    current_model = get_selected_model(provider="gemini")
     try:
-        chosen = select_model_interactive(AVAILABLE_MODELS, default_option=current_model)
-        set_selected_model(chosen)
+        chosen = select_model_interactive(available_models, default_option=current_model)
+        set_selected_model(chosen, provider="gemini")
         console.print(f"\n[bold green]✓[/bold green] Selected model: [bold cyan]{chosen}[/bold cyan]")
     except KeyboardInterrupt:
         console.print("\n[dim]Model selection cancelled.[/dim]")

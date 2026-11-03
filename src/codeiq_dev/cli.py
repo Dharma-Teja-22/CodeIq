@@ -258,6 +258,8 @@ tools = [
 # Async chat implementation
 async def _chat():
     """Interactive CodeIq chat with Git and File tools using asyncio."""
+    session_tokens = 0
+
     while True:
         prompt = await asyncio.to_thread(
             typer.prompt,
@@ -289,6 +291,9 @@ async def _chat():
             {"role": "user", "content": prompt},
         ]
 
+        query_tokens = 0
+        completion_tokens = 0
+
         status_text = "Thinking..."
         current_model = get_selected_model()
         # Inner loop handles all tool-calling rounds for this question.
@@ -304,6 +309,17 @@ async def _chat():
                         tools=tools,
                         tool_choice="auto",
                     )
+                if getattr(response, "usage", None): # to retrieve an object's attribute safely (obj, att_name, default_val)
+                    prompt_t = response.usage.prompt_tokens or 0
+                    comp_t = response.usage.completion_tokens or 0
+                    total_t = response.usage.total_tokens
+
+                    # Update query tokens to latest prompt tokens for this round
+                    query_tokens = prompt_t
+                    # Accumulate completion tokens across tool-calling iterations
+                    completion_tokens += comp_t
+                    session_tokens += total_t
+
                 assistant_message = response.choices[0].message
                 # No more tool calls: display the final response.
                 if not assistant_message.tool_calls:
@@ -315,6 +331,9 @@ async def _chat():
                             Text("Assistant:", style="bold cyan"),
                             Text(content, style="green"),
                         )
+                    console.print(
+                        f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n"
+                    )
                     break
 
                 # Preserve the assistant's tool-call message.
@@ -533,6 +552,12 @@ async def _generate_response(prompt: str):
             messages=[{"role": "user", "content": prompt}],
         )
     console.print(response.choices[0].message.content, style="green")
+        
+    if getattr(response, "usage", None):
+        p_tokens = response.usage.prompt_tokens or 0
+        c_tokens = response.usage.completion_tokens or 0
+        t_tokens = response.usage.total_tokens
+        console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens}[/dim]\n")
 
 # Generate response from AI model
 @app.command()

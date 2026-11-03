@@ -6,14 +6,130 @@ import sys
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import os
+import sys
+from pathlib import Path
 import typer
 from rich.console import Console
 from rich.text import Text
 import json
 
+import msvcrt
+
 load_dotenv()
 app = typer.Typer()
 console = Console()
+
+# 5 supported models
+AVAILABLE_MODELS = [
+    "gemini-flash-latest",
+    "gemini-3.1-pro-preview",
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite",
+    "gemini-3.8-flash",
+]
+
+DEFAULT_MODEL = "gemini-3.5-flash-lite"
+CONFIG_FILE = Path(".codeiq_config.json")
+
+
+def get_selected_model() -> str:
+    """
+    Retrieve currently selected model ID.
+    Priority:
+    1. Session environment variable `MODEL` (e.g. set MODEL=... or $env:MODEL=...)
+    2. Persisted config file (`.codeiq_config.json`)
+    3. Default fallback model (`DEFAULT_MODEL`)
+    """
+    # 1. Environment variable for the current terminal session
+    env_model = os.getenv("MODEL")
+    if env_model:
+        # Strip potential surrounding quotes from shells (e.g. 'model' or "model")
+        cleaned_env_model = env_model.strip().strip("'").strip('"')
+        if cleaned_env_model in AVAILABLE_MODELS:
+            return cleaned_env_model
+
+    # 2. Persisted configuration file
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                configured = data.get("model")
+                if configured and configured in AVAILABLE_MODELS:
+                    return configured
+        except Exception:
+            pass
+
+    # 3. Default fallback
+    return DEFAULT_MODEL
+
+
+def set_selected_model(model_name: str) -> None:
+    """Save selected model to config file."""
+    data = {}
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    data["model"] = model_name
+    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def select_model_interactive(options: list[str], default_option: str) -> str:
+    """
+    Renders an interactive arrow-key selection list (like npm create vite).
+    Allows navigating using UP/DOWN arrow keys and selecting with ENTER.
+    """
+    current_idx = options.index(default_option) if default_option in options else 0
+
+    def render_menu():
+        # Clear previous lines to re-render in place
+        sys.stdout.write(f"\r\033[{len(options)}A")
+        sys.stdout.flush()
+        for idx, opt in enumerate(options):
+            is_active = (idx == current_idx)
+            is_def = (opt == default_option)
+            cursor = ">" if is_active else " "
+            def_tag = " (default)" if is_def else ""
+
+            if is_active:
+                # Highlighted option (Vite cyan/bold style)
+                sys.stdout.write(f"\033[2K\033[36m\033[1m {cursor} {opt}{def_tag}\033[0m\n")
+            else:
+                sys.stdout.write(f"\033[2K   {opt}{def_tag}\n")
+        sys.stdout.flush()
+
+    # Initial render
+    console.print("[dim]? Select a model (Use arrow keys or enter number, press Enter to confirm):[/dim]")
+    for _ in options:
+        sys.stdout.write("\n")
+    render_menu()
+
+    while True:
+        key = msvcrt.getch()
+        # Special/extended key prefix (e.g. arrow keys)
+        if key in (b"\x00", b"\xe0"):
+            arrow = msvcrt.getch()
+            if arrow == b"H":  # Up arrow
+                current_idx = (current_idx - 1) % len(options)
+                render_menu()
+            elif arrow == b"P":  # Down arrow
+                current_idx = (current_idx + 1) % len(options)
+                render_menu()
+        elif key in (b"\r", b"\n"):  # Enter key
+            break
+        elif key == b"\x03":  # Ctrl+C
+            raise KeyboardInterrupt
+        elif key.isdigit():
+            num = int(key.decode()) - 1
+            if 0 <= num < len(options):
+                current_idx = num
+                render_menu()
+
+    return options[current_idx]
+
 
 # On Windows, silence the known Proactor transport __del__ bug on loop close
 if sys.platform == "win32":
@@ -160,6 +276,7 @@ async def _chat():
         ]
 
         status_text = "Thinking..."
+        current_model = get_selected_model()
         # Inner loop handles all tool-calling rounds for this question.
         while True:
             try:
@@ -168,7 +285,7 @@ async def _chat():
                     spinner="arc",
                 ):
                     response = await client.chat.completions.create(
-                        model="gemini-3.5-flash-lite",
+                        model=current_model,
                         messages=messages,
                         tools=tools,
                         tool_choice="auto",
@@ -305,7 +422,7 @@ async def _chat():
                                     with console.status("[bold cyan]Generating commit message...[/bold cyan]", spinner="arc"):
                                         # pyrefly: ignore[not-async]
                                         response = await client.chat.completions.create(
-                                            model="gemini-3.5-flash-lite",
+                                            model=current_model,
                                             messages=[
                                                 {
                                                     "role": "system",
@@ -393,11 +510,12 @@ def chat():
     asyncio.run(runner())
 
 async def _generate_response(prompt: str):
+    current_model = get_selected_model()
     typer.echo(f"\nQ: {prompt}")
     with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc"):
         # pyrefly: ignore[not-async]
         response = await client.chat.completions.create(
-            model="gemini-3.5-flash-lite",
+            model=current_model,
             messages=[{"role": "user", "content": prompt}],
         )
     console.print(response.choices[0].message.content, style="green")
@@ -413,6 +531,21 @@ def generate_response(prompt: str):
         prompt (str): The prompt to send to the AI model.
     """
     asyncio.run(_generate_response(prompt))
+
+@app.command(name="models")
+def models():
+    """
+    Select an AI model interactively using arrow keys (like npm create vite).
+    Usage:
+        codeiq models
+    """
+    current_model = get_selected_model()
+    try:
+        chosen = select_model_interactive(AVAILABLE_MODELS, default_option=current_model)
+        set_selected_model(chosen)
+        console.print(f"\n[bold green]✓[/bold green] Selected model: [bold cyan]{chosen}[/bold cyan]")
+    except KeyboardInterrupt:
+        console.print("\n[dim]Model selection cancelled.[/dim]")
 
 if __name__ == "__main__":
     app()

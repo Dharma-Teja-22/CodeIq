@@ -82,12 +82,17 @@ def select_model_interactive(options: list[str], default_option: str) -> str:
     Renders an interactive arrow-key selection list (like npm create vite).
     Allows navigating using UP/DOWN arrow keys and selecting with ENTER.
     """
+    # Enable Windows VT100 / ANSI escape sequence processing in cmd.exe
+    os.system("")
+
     current_idx = options.index(default_option) if default_option in options else 0
 
-    def render_menu():
-        # Clear previous lines to re-render in place
-        sys.stdout.write(f"\r\033[{len(options)}A")
-        sys.stdout.flush()
+    # Hide cursor during interactive selection to eliminate flickering
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+
+    def build_menu() -> str:
+        lines = []
         for idx, opt in enumerate(options):
             is_active = (idx == current_idx)
             is_def = (opt == default_option)
@@ -95,40 +100,49 @@ def select_model_interactive(options: list[str], default_option: str) -> str:
             def_tag = " (default)" if is_def else ""
 
             if is_active:
-                # Highlighted option (Vite cyan/bold style)
-                sys.stdout.write(f"\033[2K\033[36m\033[1m {cursor} {opt}{def_tag}\033[0m\n")
+                lines.append(f"\033[2K\033[36m\033[1m {cursor} {opt}{def_tag}\033[0m")
             else:
-                sys.stdout.write(f"\033[2K   {opt}{def_tag}\n")
+                lines.append(f"\033[2K   {opt}{def_tag}")
+        return "\n".join(lines) + "\n"
+
+    try:
+        console.print("[dim]? Select a model (Use arrow keys or enter number, press Enter to confirm):[/dim]")
+        # Reserve lines once
+        sys.stdout.write("\n" * len(options))
+        sys.stdout.write(f"\033[{len(options)}A")
+        sys.stdout.write(build_menu())
         sys.stdout.flush()
 
-    # Initial render
-    console.print("[dim]? Select a model (Use arrow keys or enter number, press Enter to confirm):[/dim]")
-    for _ in options:
-        sys.stdout.write("\n")
-    render_menu()
+        while True:
+            key = msvcrt.getch()
+            # Special/extended key prefix (e.g. arrow keys)
+            if key in (b"\x00", b"\xe0"):
+                arrow = msvcrt.getch()
+                if arrow == b"H":  # Up arrow
+                    current_idx = (current_idx - 1) % len(options)
+                elif arrow == b"P":  # Down arrow
+                    current_idx = (current_idx + 1) % len(options)
+                else:
+                    continue
+                # Move back up and redraw in a single atomic write
+                sys.stdout.write(f"\033[{len(options)}A" + build_menu())
+                sys.stdout.flush()
+            elif key in (b"\r", b"\n"):  # Enter key
+                break
+            elif key == b"\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            elif key.isdigit():
+                num = int(key.decode()) - 1
+                if 0 <= num < len(options):
+                    current_idx = num
+                    sys.stdout.write(f"\033[{len(options)}A" + build_menu())
+                    sys.stdout.flush()
 
-    while True:
-        key = msvcrt.getch()
-        # Special/extended key prefix (e.g. arrow keys)
-        if key in (b"\x00", b"\xe0"):
-            arrow = msvcrt.getch()
-            if arrow == b"H":  # Up arrow
-                current_idx = (current_idx - 1) % len(options)
-                render_menu()
-            elif arrow == b"P":  # Down arrow
-                current_idx = (current_idx + 1) % len(options)
-                render_menu()
-        elif key in (b"\r", b"\n"):  # Enter key
-            break
-        elif key == b"\x03":  # Ctrl+C
-            raise KeyboardInterrupt
-        elif key.isdigit():
-            num = int(key.decode()) - 1
-            if 0 <= num < len(options):
-                current_idx = num
-                render_menu()
-
-    return options[current_idx]
+        return options[current_idx]
+    finally:
+        # Restore visible cursor
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
 
 
 # On Windows, silence the known Proactor transport __del__ bug on loop close

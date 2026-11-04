@@ -4,15 +4,12 @@ from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.miscellaneous_tools import executeTool
 import asyncio
 import sys
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
 import os
-import sys
 from pathlib import Path
 import typer
 from rich.console import Console
 from rich.text import Text
-from rich.markdown import Markdown
+# from rich.markdown import Markdown
 import json
 
 import msvcrt
@@ -25,7 +22,6 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-load_dotenv()
 app = typer.Typer()
 console = Console()
 
@@ -37,6 +33,12 @@ from codeiq_dev.core.config import (
     get_available_models,
     get_selected_model,
     set_selected_model,
+)
+from codeiq_dev.core.llm import (
+    close_client,
+    create_chat_stream,
+    generate_commit_message,
+    stream_chat_turn,
 )
 
 
@@ -112,112 +114,6 @@ def select_model_interactive(options: list[str], default_option: str) -> str:
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url=GEMINI_BASE_URL,
-)
-
-# Tools
-
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "gitOperations",
-            "description": (
-                "Perform Git operations in the current repository. Add: Add a single file, multiple files, or all new, modified, and deleted files to Git. For example, add app.py or add all the latest code changes. Commit: Save the staged changes with a commit message. For example, commit with message Initial setup. Push: Upload committed changes to the remote repository on the current branch. For example, push my changes. Pull: Get the latest changes from the remote repository into the current branch. For example, pull the latest changes. Branch: Show the name of the current Git branch. For example, which branch am I working on. Choose the correct operation based on the user's request."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": [
-                            "add",
-                            "commit",
-                            "push",
-                            "pull",
-                            "branch"
-                        ],
-                        "description": "The Git operation to perform."
-                    },
-                    "file_name": {
-                        "type": "string",
-                        "description": (
-                            "File or directory to stage. "
-                            "Use '.' for all changes."
-                        )
-                    },
-                    "commit_message": {
-                        "type": "string",
-                        "description": "Message to use for a commit."
-                    }
-                },
-                "required": ["operation"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "fileOperations",
-            "description": (
-                "Perform file operations in the project. "
-                "read_file: Read content of a file. "
-                "write_file: Write or create a completely new file when explicitly requested. DO NOT use write_file to duplicate an existing file when fixing errors. "
-                "replace_content: Replace an existing specific block of code in an existing file with corrected or updated code. "
-                "find_file: Search for a file by name."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "operation": {
-                        "type": "string",
-                        "enum": ["read_file", "write_file", "replace_content", "find_file"],
-                        "description": "The file operation to perform."
-                    },
-                    "file_path": {
-                        "type": "string",
-                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'app.py')."
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Content to write (for write_file)."
-                    },
-                    "old_code": {
-                        "type": "string",
-                        "description": "Exact existing code snippet to be replaced (for replace_content)."
-                    },
-                    "new_code": {
-                        "type": "string",
-                        "description": "New replacement code snippet (for replace_content)."
-                    }
-                },
-                "required": ["operation", "file_path"]
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "executeTool",
-            "description": (
-                "Execute a single short-running, non-interactive terminal command in the user's project environment. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes, including development servers, production servers, file watchers, monitoring utilities, interactive shells, REPL sessions, or commands that wait indefinitely for input. Examples of prohibited commands include npm start, npm run dev, yarn dev, pnpm dev, vite, nodemon, next dev, uvicorn, gunicorn, flask run, streamlit run, watch, top, htop, and tail -f. Never bypass these restrictions through command chaining, shell wrappers, or background execution. If the requested operation requires a continuous or long-running process, inform the user that it is not supported instead of invoking this tool. Execute only commands directly related to the user's request, enforce the configured execution timeout, and report the execution result clearly. If execution fails or times out, communicate the error without automatically retrying. Keep the returned output concise and limit it to approximately 350 characters, clearly indicating when the output has been truncated."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The exact, complete terminal command that needs to be executed. Provide only one short-running, non-interactive command that is directly relevant to the user's request and is expected to complete within the configured timeout. Do not include explanations, Markdown formatting, or additional instructions. Avoid destructive or irreversible operations unless explicitly authorized. Do not provide commands that start servers, background processes, watchers, monitoring utilities, interactive shells, REPL sessions, infinite loops, or processes that require continuous execution. Do not chain multiple commands using &&, ||, ;, pipes, or shell wrappers to bypass execution restrictions. The command must be suitable for execution in the user's project environment and must be presented to the user for explicit approval before execution."
-                    }
-                },
-                "required": ["command"]
-            }
-        }
-    }
-]
-
 # Async chat implementation
 async def _chat():
     """Interactive CodeIq chat with Git and File tools using asyncio."""
@@ -232,6 +128,8 @@ async def _chat():
         if prompt.strip().lower() in ("exit", "quit","bye","close"):
             console.print("[yellow]Chat ended.[/yellow]")
             break
+
+        repo_structure = repoMap.get_all_paths()
 
         messages = [
             {
@@ -249,7 +147,7 @@ async def _chat():
                     "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
                     "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
                     "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
-                    f"Here is the project structure: {repoMap}, if there is any folder which might be related to the request, please explore it and provide the response."
+                    f"Here is the project structure: {repo_structure}, if there is any folder which might be related to the request, please explore it and provide the response."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -268,57 +166,38 @@ async def _chat():
                     f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
                 ) as status_spinner:
-                    response = await client.chat.completions.create(
-                        model=current_model,
-                        messages=messages,
-                        tools=tools,
-                        tool_choice="auto",
-                        stream=True,
-                        stream_options={"include_usage": True}
-                    )
-                    full_content = ""
                     printed_assistant_prefix = False
 
-                    async for chunk in response:
-                        if getattr(chunk, "usage", None) and chunk.usage:
-                            query_tokens = chunk.usage.prompt_tokens or query_tokens
-                            completion_tokens = chunk.usage.completion_tokens or completion_tokens
-                            session_tokens = query_tokens + completion_tokens
-                        if getattr(chunk, "choices", None):
-                            for choice in chunk.choices:
-                                delta = getattr(choice, "delta", None)
-                                if delta:
-                                    if getattr(delta, "content", None):
-                                        content_chunk = delta.content
-                                        if not printed_assistant_prefix:
-                                            # Stop spinner so the prompt line clears before printing label
-                                            if status_spinner:
-                                                status_spinner.stop()
-                                            console.print(Text("Assistant:", style="bold cyan"))
-                                            printed_assistant_prefix = True
-                                        console.print(content_chunk, style="green", end="")
-                                        full_content += content_chunk
-                                    if getattr(delta, "tool_calls", None):
-                                        requested_tool_calls.extend(delta.tool_calls)
+                    def handle_start():
+                        nonlocal printed_assistant_prefix
+                        if status_spinner:
+                            status_spinner.stop()
+                        console.print(Text("Assistant:", style="bold cyan"))
+                        printed_assistant_prefix = True
+
+                    def handle_token(tok: str):
+                        console.print(tok, style="green", end="")
+
+                    assistant_message, usage_info = await stream_chat_turn(
+                        messages=messages,
+                        model=current_model,
+                        with_tools=True,
+                        on_token=handle_token,
+                        on_start_streaming=handle_start,
+                    )
+
+                    requested_tool_calls = assistant_message.tool_calls
+                    full_content = assistant_message.content
+
+                    if usage_info["query_tokens"]:
+                        query_tokens = usage_info["query_tokens"]
+                    if usage_info["completion_tokens"]:
+                        completion_tokens = usage_info["completion_tokens"]
+                    if usage_info["session_tokens"]:
+                        session_tokens = usage_info["session_tokens"]
 
                     if printed_assistant_prefix:
                         console.print()
-
-                    # Create a mock assistant message object for consistency with non-streaming or subsequent tool handling
-                    class MockMessage:
-                        def __init__(self, content, tool_calls):
-                            self.content = content
-                            self.tool_calls = tool_calls
-                        def model_dump(self, exclude_none=False):
-                            d = {"role": "assistant", "content": self.content}
-                            if self.tool_calls:
-                                d["tool_calls"] = [
-                                    tc.model_dump() if hasattr(tc, "model_dump") else tc
-                                    for tc in self.tool_calls
-                                ]
-                            return d
-
-                    assistant_message = MockMessage(full_content, requested_tool_calls)
 
                 # No more tool calls: display tokens and end round.
                 if not requested_tool_calls:
@@ -419,48 +298,8 @@ async def _chat():
                                 if not diff or diff.startswith("Failed to get the diff"):
                                     result = diff or "No staged changes found."
                                 else:
-                                    # Pick the first 200 lines from the diff
-                                    diff_lines = diff.splitlines()
-                                    limited_diff = "\n".join(diff_lines[:200])
-                                    prompt = f'''Generate a short, descriptive Git commit message based on the staged changes. Follow Conventional Commits format.
-                                            Use one of these prefixes:
-                                                - feat: for new functionality
-                                                - fix: for bug fixes
-                                                - refactor: for code restructuring
-                                                - docs: for documentation changes
-                                                - test: for test changes
-                                                - perf: for performance improvements
-                                                - chore: for maintenance tasks
-                                                - style: for formatting changes
-
-                                                Rules:
-                                                - Use simple, clear English.
-                                                - Start with the appropriate prefix.
-                                                - Use lowercase after the prefix.
-                                                - Keep the message under 72 characters.
-                                                - Describe the actual change, not the implementation process.
-                                                - Return only the commit message, without quotes or Markdown.
-                                                - Do not invent changes that are not evident from the diff.
-
-                                                Staged changes:
-                                                {limited_diff}
-                                            '''
                                     with console.status("[bold cyan]Generating commit message...[/bold cyan]", spinner="arc"):
-                                        # pyrefly: ignore[not-async]
-                                        response = await client.chat.completions.create(
-                                            model=current_model,
-                                            messages=[
-                                                {
-                                                    "role": "system",
-                                                    "content": (
-                                                        "You generate a concise Git commit messages with the Conventional Commits format. Return only the commit message text."
-                                                    ),
-                                                },
-                                                {"role": "user", "content": prompt},
-                                            ],
-                                        )
-
-                                    commit_message = (response.choices[0].message.content or "").strip().strip('"').strip("'")
+                                        commit_message = await generate_commit_message(diff, model=current_model)
 
                                     if not commit_message:
                                         result = "Failed to generate a commit message."
@@ -532,25 +371,42 @@ def chat():
             await _chat()
         finally:
             # pyrefly: ignore[not-async]
-            await client.close()
+            await close_client()
     asyncio.run(runner())
 
 async def _generate_response(prompt: str):
     current_model = get_selected_model()
     typer.echo(f"\nQ: {prompt}")
-    with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc"):
+
+    p_tokens = 0
+    c_tokens = 0
+    t_tokens = 0
+
+    with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc") as status_spinner:
         # pyrefly: ignore[not-async]
-        response = await client.chat.completions.create(
-            model=current_model,
+        stream_response = await create_chat_stream(
             messages=[{"role": "user", "content": prompt}],
+            model=current_model,
+            with_tools=False,
         )
-    console.print(response.choices[0].message.content, style="green")
-        
-    if getattr(response, "usage", None):
-        p_tokens = response.usage.prompt_tokens or 0
-        c_tokens = response.usage.completion_tokens or 0
-        t_tokens = response.usage.total_tokens
-        console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens}[/dim]\n")
+
+        printed_prefix = False
+        async for chunk in stream_response:
+            if getattr(chunk, "usage", None) and chunk.usage:
+                p_tokens = chunk.usage.prompt_tokens or p_tokens
+                c_tokens = chunk.usage.completion_tokens or c_tokens
+                t_tokens = chunk.usage.total_tokens or (p_tokens + c_tokens)
+
+            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                if status_spinner:
+                    status_spinner.stop()
+                console.print(chunk.choices[0].delta.content, style="green", end="")
+                printed_prefix = True
+
+    if printed_prefix:
+        console.print()
+
+    console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens}[/dim]\n")
 
 # Generate response from AI model
 @app.command()

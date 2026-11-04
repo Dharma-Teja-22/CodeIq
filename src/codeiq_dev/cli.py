@@ -1,3 +1,4 @@
+from asyncio import trsock
 from codeiq_dev.utils import repoMap
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
@@ -158,6 +159,7 @@ async def _chat():
 
         status_text = "Thinking..."
         current_model = get_selected_model()
+        console.print(Text("Assistant:", style="bold cyan"))
         # Inner loop handles all tool-calling rounds for this question.
         while True:
             requested_tool_calls = []
@@ -166,16 +168,9 @@ async def _chat():
                     f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
                 ) as status_spinner:
-                    printed_assistant_prefix = False
-
-                    def handle_start():
-                        nonlocal printed_assistant_prefix
-                        if status_spinner:
-                            status_spinner.stop()
-                        console.print(Text("Assistant:", style="bold cyan"))
-                        printed_assistant_prefix = True
-
                     def handle_token(tok: str):
+                        if status_spinner and status_spinner._live.is_started:
+                            status_spinner.stop()
                         console.print(tok, style="green", end="")
 
                     assistant_message, usage_info = await stream_chat_turn(
@@ -183,7 +178,6 @@ async def _chat():
                         model=current_model,
                         with_tools=True,
                         on_token=handle_token,
-                        on_start_streaming=handle_start,
                     )
 
                     requested_tool_calls = assistant_message.tool_calls
@@ -196,16 +190,14 @@ async def _chat():
                     if usage_info["session_tokens"]:
                         session_tokens = usage_info["session_tokens"]
 
-                    if printed_assistant_prefix:
-                        console.print()
+                if assistant_message.content:
+                    console.print()
 
                 # No more tool calls: display tokens and end round.
                 if not requested_tool_calls:
-                    if not full_content.strip() and not printed_assistant_prefix and status_text != "Thinking...":
+                    if (not full_content.strip()) and status_text != "Thinking...":
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
-                    console.print(
-                        f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n"
-                    )
+                    console.print(f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n")
                     break
 
                 # Preserve the assistant's tool-call message.

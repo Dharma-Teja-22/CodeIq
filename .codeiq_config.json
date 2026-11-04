@@ -1,5 +1,5 @@
 {
-  "Default_model": "gemini-3.6-flash",
+  "Default_model": "gemini-3.5-flash-lite",
   "providers": {
     "gemini": {
       "default": "gemini-3.5-flash-lite",

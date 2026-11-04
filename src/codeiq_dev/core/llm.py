@@ -158,7 +158,7 @@ async def stream_chat_turn(
     with_tools: bool = True,
     on_token = None,
     on_tool_call = None,
-    on_start_streaming = None,
+    # on_start_streaming = None,
 ) -> tuple[AssistantMessage, dict]:
     """
     Handles streaming a single chat completion turn.
@@ -168,7 +168,7 @@ async def stream_chat_turn(
     full_content = ""
     requested_tool_calls = []
     usage_info = {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}
-    started_streaming = False
+    # started_streaming = False
 
     async for chunk in stream:
         if getattr(chunk, "usage", None) and chunk.usage:
@@ -184,10 +184,8 @@ async def stream_chat_turn(
                 if delta:
                     if getattr(delta, "content", None):
                         content_chunk = delta.content
-                        if not started_streaming:
-                            started_streaming = True
-                            if on_start_streaming:
-                                on_start_streaming()
+                        # if not started_streaming:
+                        #     started_streaming = True
                         if on_token:
                             on_token(content_chunk)
                         full_content += content_chunk

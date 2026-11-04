@@ -259,6 +259,7 @@ async def _chat():
         current_model = get_selected_model()
         # Inner loop handles all tool-calling rounds for this question.
         while True:
+            requested_tool_calls = []
             try:
                 with console.status(
                     f"[bold cyan]{status_text}[/bold cyan]",
@@ -269,21 +270,49 @@ async def _chat():
                         messages=messages,
                         tools=tools,
                         tool_choice="auto",
+                        stream=True,
+                        stream_options={"include_usage": True}
                     )
-                if getattr(response, "usage", None): # to retrieve an object's attribute safely (obj, att_name, default_val)
-                    prompt_t = response.usage.prompt_tokens or 0
-                    comp_t = response.usage.completion_tokens or 0
-                    total_t = response.usage.total_tokens
+                    console.print(
+                                    Text("Assistant:", style="bold cyan")
+                                )
+                    full_content = ""
+                    async for chunk in response:
+                        if getattr(chunk, "usage", None) and chunk.usage:
+                            query_tokens = chunk.usage.prompt_tokens or query_tokens
+                            completion_tokens = chunk.usage.completion_tokens or completion_tokens
+                            session_tokens = query_tokens + completion_tokens
+                        if getattr(chunk, "choices", None):
+                            for choice in chunk.choices:
+                                delta = getattr(choice, "delta", None)
+                                if delta:
+                                    if getattr(delta, "content", None):
+                                        content_chunk = delta.content
+                                        full_content += content_chunk
+                                        console.print(
+                                            Markdown(content_chunk, style="green"),
+                                            end=""
+                                        )
+                                    if getattr(delta, "tool_calls", None):
+                                        requested_tool_calls.extend(delta.tool_calls)
 
-                    # Update query tokens to latest prompt tokens for this round
-                    query_tokens = prompt_t
-                    # Accumulate completion tokens across tool-calling iterations
-                    completion_tokens += comp_t
-                    session_tokens += total_t
+                    # Create a mock assistant message object for consistency with non-streaming or subsequent tool handling
+                    class MockMessage:
+                        def __init__(self, content, tool_calls):
+                            self.content = content
+                            self.tool_calls = tool_calls
+                        def model_dump(self, exclude_none=False):
+                            d = {"role": "assistant", "content": self.content}
+                            if self.tool_calls:
+                                d["tool_calls"] = [
+                                    tc.model_dump() if hasattr(tc, "model_dump") else tc
+                                    for tc in self.tool_calls
+                                ]
+                            return d
 
-                assistant_message = response.choices[0].message
+                    assistant_message = MockMessage(full_content, requested_tool_calls)
                 # No more tool calls: display the final response.
-                if not assistant_message.tool_calls:
+                if not requested_tool_calls:
                     content = (assistant_message.content or "").strip()
                     if not content and status_text != "Thinking...":
                         content = "Done."
@@ -304,7 +333,7 @@ async def _chat():
                 cancelled = False
 
                 # Execute all tool calls returned in this response.
-                for tool_call in assistant_message.tool_calls:
+                for tool_call in requested_tool_calls:
                     try:
                         arguments = json.loads(tool_call.function.arguments)
 

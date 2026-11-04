@@ -41,6 +41,7 @@ from codeiq_dev.core.llm import (
     generate_commit_message,
     stream_chat_turn,
 )
+from codeiq_dev.core.opik_tracker import get_opik_client
 
 
 def select_model_interactive(options: list[str], default_option: str) -> str:
@@ -156,7 +157,22 @@ async def _chat():
 
         query_tokens = 0
         completion_tokens = 0
+        #-----------------------------------------------------------------------------------------------------------
+        # Setup Opik trace for this user interaction
+        opik_client = get_opik_client()
+        opik_trace = None
+        if opik_client:
+            try:
+                opik_trace = opik_client.trace(
+                    name="agent_interaction",
+                    input={"prompt": prompt, "model": get_selected_model()},
+                    metadata={"model": get_selected_model()},
+                    tags=["codeiq_cli"],
+                )
+            except Exception:
+                opik_trace = None
 
+        #-----------------------------------------------------------------------------------------------------------
         status_text = "Thinking..."
         current_model = get_selected_model()
         console.print(Text("Assistant:", style="bold cyan"))
@@ -178,6 +194,7 @@ async def _chat():
                         model=current_model,
                         with_tools=True,
                         on_token=handle_token,
+                        parent_span=opik_trace,
                     )
 
                     requested_tool_calls = assistant_message.tool_calls
@@ -198,8 +215,21 @@ async def _chat():
                     if (not full_content.strip()) and status_text != "Thinking...":
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
                     console.print(f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n")
+                    #-----------------------------------------------------------------------------------------------------------
+                    if opik_trace:
+                        try:
+                            opik_trace.end(
+                                output={"response": full_content},
+                                usage={
+                                    "prompt_tokens": query_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": session_tokens,
+                                },
+                            )
+                        except Exception:
+                            pass
                     break
-
+                    #-----------------------------------------------------------------------------------------------------------
                 # Preserve the assistant's tool-call message.
                 messages.append(assistant_message.model_dump(exclude_none=True))
 
@@ -207,6 +237,18 @@ async def _chat():
 
                 # Execute all tool calls returned in this response.
                 for tool_call in requested_tool_calls:
+                    #-----------------------------------------------------------------------------------------------------------
+                    tool_span = None
+                    if opik_trace:
+                        try:
+                            tool_span = opik_trace.span(
+                                name=f"tool:{tool_call.function.name}",
+                                type="tool",
+                                input={"arguments": tool_call.function.arguments},
+                            )
+                        except Exception:
+                            tool_span = None
+                    #-----------------------------------------------------------------------------------------------------------
                     try:
                         arguments = json.loads(tool_call.function.arguments)
 
@@ -340,7 +382,17 @@ async def _chat():
                     except Exception as exc:
                         result = f"Tool execution failed: {exc}"
                         console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
-
+                    #-----------------------------------------------------------------------------------------------------------
+                    finally:
+                        if tool_span:
+                            try:
+                                tool_span.end(
+                                    output={"result": str(result)},
+                                    metadata={"cancelled": cancelled},
+                                )
+                            except Exception:
+                                pass
+                    #-----------------------------------------------------------------------------------------------------------
                     messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
 
                     if cancelled:

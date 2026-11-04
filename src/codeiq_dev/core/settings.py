@@ -17,3 +17,10 @@ GEMINI_BASE_URL = os.getenv(
 
 # Active Model Override from environment
 MODEL_ENV = os.getenv("MODEL")
+#-----------------------------------------------------------------------------------------------------------
+# Opik Tracing & Evaluation Configuration
+OPIK_API_KEY = os.getenv("OPIK_API_KEY")
+OPIK_WORKSPACE = os.getenv("OPIK_WORKSPACE")
+OPIK_PROJECT_NAME = os.getenv("OPIK_PROJECT_NAME", "CodeIq_Opik")
+OPIK_URL_OVERRIDE = os.getenv("OPIK_URL_OVERRIDE")
+#-----------------------------------------------------------------------------------------------------------

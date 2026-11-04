@@ -2,7 +2,12 @@ from openai import AsyncOpenAI
 from typing import Dict, Any, List, Optional
 from codeiq_dev.core.settings import *
 from codeiq_dev.core.config import get_selected_model
+#-----------------------------------------------------------------------------------------------------------
+from codeiq_dev.core.opik_tracker import init_opik, get_opik_client
 
+# Initialize Opik if configured
+init_opik()
+#-----------------------------------------------------------------------------------------------------------
 # Initialize the shared AsyncOpenAI client
 client = AsyncOpenAI(
     api_key=GEMINI_API_KEY,
@@ -158,17 +163,17 @@ async def stream_chat_turn(
     with_tools: bool = True,
     on_token = None,
     on_tool_call = None,
-    # on_start_streaming = None,
+    parent_span = None,
 ) -> tuple[AssistantMessage, dict]:
     """
     Handles streaming a single chat completion turn.
     Returns (assistant_message, token_usage_dict).
     """
-    stream = await create_chat_stream(messages=messages, model=model, with_tools=with_tools)
+    model_name = model or get_selected_model()
+    stream = await create_chat_stream(messages=messages, model=model_name, with_tools=with_tools)
     full_content = ""
     requested_tool_calls = []
     usage_info = {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}
-    # started_streaming = False
 
     async for chunk in stream:
         if getattr(chunk, "usage", None) and chunk.usage:
@@ -184,8 +189,6 @@ async def stream_chat_turn(
                 if delta:
                     if getattr(delta, "content", None):
                         content_chunk = delta.content
-                        # if not started_streaming:
-                        #     started_streaming = True
                         if on_token:
                             on_token(content_chunk)
                         full_content += content_chunk
@@ -194,7 +197,25 @@ async def stream_chat_turn(
                         if on_tool_call:
                             for tc in delta.tool_calls:
                                 on_tool_call(tc)
-
+#-----------------------------------------------------------------------------------------------------------
+    # Log LLM span into Opik if parent span or client is available
+    if parent_span:
+        try:
+            parent_span.span(
+                name="chat_turn_llm",
+                type="llm",
+                input={"messages": messages, "model": model_name, "with_tools": with_tools},
+                output={"content": full_content, "tool_calls": [tc.model_dump() if hasattr(tc, "model_dump") else str(tc) for tc in requested_tool_calls]},
+                usage={
+                    "prompt_tokens": usage_info["query_tokens"],
+                    "completion_tokens": usage_info["completion_tokens"],
+                    "total_tokens": usage_info["session_tokens"],
+                },
+                metadata={"model": model_name},
+            )
+        except Exception:
+            pass
+#-----------------------------------------------------------------------------------------------------------
     return AssistantMessage(full_content, requested_tool_calls), usage_info
 
 

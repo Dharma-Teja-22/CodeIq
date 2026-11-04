@@ -1,3 +1,4 @@
+from codeiq_dev.utils import repoMap
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.miscellaneous_tools import executeTool
@@ -30,7 +31,8 @@ console = Console()
 
 from typing import Optional
 
-from codeiq_dev.config import (
+from codeiq_dev.core.settings import *
+from codeiq_dev.core.config import (
     add_model_to_config,
     get_available_models,
     get_selected_model,
@@ -111,8 +113,8 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 client = AsyncOpenAI(
-    api_key=os.getenv("GEMINI_API_KEY"),
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=GEMINI_API_KEY,
+    base_url=GEMINI_BASE_URL,
 )
 
 # Tools
@@ -247,6 +249,7 @@ async def _chat():
                     "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
                     "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
                     "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
+                    f"Here is the project structure: {repoMap}, if there is any folder which might be related to the request, please explore it and provide the response."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -264,7 +267,7 @@ async def _chat():
                 with console.status(
                     f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
-                ):
+                ) as status_spinner:
                     response = await client.chat.completions.create(
                         model=current_model,
                         messages=messages,
@@ -273,10 +276,9 @@ async def _chat():
                         stream=True,
                         stream_options={"include_usage": True}
                     )
-                    console.print(
-                                    Text("Assistant:", style="bold cyan")
-                                )
                     full_content = ""
+                    printed_assistant_prefix = False
+
                     async for chunk in response:
                         if getattr(chunk, "usage", None) and chunk.usage:
                             query_tokens = chunk.usage.prompt_tokens or query_tokens
@@ -288,13 +290,19 @@ async def _chat():
                                 if delta:
                                     if getattr(delta, "content", None):
                                         content_chunk = delta.content
+                                        if not printed_assistant_prefix:
+                                            # Stop spinner so the prompt line clears before printing label
+                                            if status_spinner:
+                                                status_spinner.stop()
+                                            console.print(Text("Assistant:", style="bold cyan"))
+                                            printed_assistant_prefix = True
+                                        console.print(content_chunk, style="green", end="")
                                         full_content += content_chunk
-                                        console.print(
-                                            Markdown(content_chunk, style="green"),
-                                            end=""
-                                        )
                                     if getattr(delta, "tool_calls", None):
                                         requested_tool_calls.extend(delta.tool_calls)
+
+                    if printed_assistant_prefix:
+                        console.print()
 
                     # Create a mock assistant message object for consistency with non-streaming or subsequent tool handling
                     class MockMessage:
@@ -311,17 +319,11 @@ async def _chat():
                             return d
 
                     assistant_message = MockMessage(full_content, requested_tool_calls)
-                # No more tool calls: display the final response.
+
+                # No more tool calls: display tokens and end round.
                 if not requested_tool_calls:
-                    content = (assistant_message.content or "").strip()
-                    if not content and status_text != "Thinking...":
-                        content = "Done."
-                    if content:
-                        console.print(
-                            Text("Assistant:", style="bold cyan"),
-                            # Use Markdown to render rich content
-                            Markdown(content, style="green"),
-                        )
+                    if not full_content.strip() and not printed_assistant_prefix and status_text != "Thinking...":
+                        console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
                     console.print(
                         f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n"
                     )

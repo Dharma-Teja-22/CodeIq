@@ -11,6 +11,7 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.text import Text
+from rich.markdown import Markdown
 import json
 
 import msvcrt
@@ -289,7 +290,8 @@ async def _chat():
                     if content:
                         console.print(
                             Text("Assistant:", style="bold cyan"),
-                            Text(content, style="green"),
+                            # Use Markdown to render rich content
+                            Markdown(content, style="green"),
                         )
                     console.print(
                         f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n"

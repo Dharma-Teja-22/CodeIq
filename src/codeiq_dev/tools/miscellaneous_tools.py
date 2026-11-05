@@ -25,7 +25,15 @@ DEFAULT_TIMEOUT_SECONDS = 30
 
 
 def is_continuous_or_long_running(command: str) -> bool:
-    """Check if a command represents a continuous, interactive, or long-running process."""
+    """
+    Check if a command represents a continuous, interactive, or long-running process.
+
+    Args:
+        command (str): Command line string to inspect.
+
+    Returns:
+        bool: True if the command is continuous or long-running, False otherwise.
+    """
     cmd_clean = command.strip().lower()
 
     # Exact or prefixed match for known servers/tools
@@ -63,7 +71,16 @@ def is_continuous_or_long_running(command: str) -> bool:
 
 
 def truncate_output(text: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
-    """Truncates output to approximately max_length characters to keep it concise and readable."""
+    """
+    Truncates output to approximately max_length characters to keep it concise and readable.
+
+    Args:
+        text (str): Raw string output to be truncated.
+        max_length (int): Maximum character limit. Defaults to MAX_OUTPUT_LENGTH (350).
+
+    Returns:
+        str: Truncated output string with omission notice if truncated.
+    """
     if len(text) <= max_length:
         return text
     truncated = text[:max_length].rstrip()

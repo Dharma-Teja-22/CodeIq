@@ -17,3 +17,4 @@ GEMINI_BASE_URL = os.getenv(
 
 # Active Model Override from environment
 MODEL_ENV = os.getenv("MODEL")
+JINA_API_KEY = os.getenv("JINA_API_KEY")

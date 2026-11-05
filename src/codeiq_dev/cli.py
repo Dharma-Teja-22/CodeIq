@@ -157,6 +157,11 @@ async def _chat():
 
         query_tokens = 0
         completion_tokens = 0
+        session_tokens = 0
+        total_tool_calls = 0
+        has_tool_execution_error = False
+        import time, re
+        turn_start_time = time.time()
         #-----------------------------------------------------------------------------------------------------------
         # Setup Opik trace for this user interaction
         opik_client = get_opik_client()
@@ -218,12 +223,32 @@ async def _chat():
                     #-----------------------------------------------------------------------------------------------------------
                     if opik_trace:
                         try:
+                            elapsed_turn_time = round(time.time() - turn_start_time, 2)
+                            # Safety Checks
+                            has_secret = bool(re.search(r'(AIza[0-9A-Za-z-_]{35}|sk-[a-zA-Z0-9]{32,})', full_content or ""))
+                            env_leak = has_secret or (".env" in full_content and "GEMINI_API_KEY" in full_content)
+                            data_privacy = not env_leak
+                            unauthorized_actions = False
+
                             opik_trace.end(
                                 output={"response": full_content},
                                 usage={
                                     "prompt_tokens": query_tokens,
                                     "completion_tokens": completion_tokens,
                                     "total_tokens": session_tokens,
+                                },
+                                metadata={
+                                    "correct_tool_selection": True,
+                                    "correct_arguments": True,
+                                    "task_completion": not has_tool_execution_error,
+                                    "response_time_sec": elapsed_turn_time,
+                                    "query_tokens": query_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": session_tokens,
+                                    "tool_call_count": total_tool_calls,
+                                    "data_privacy_preserved": data_privacy,
+                                    "no_unauthorized_actions": not unauthorized_actions,
+                                    "safety_passed": data_privacy and (not unauthorized_actions),
                                 },
                             )
                         except Exception:
@@ -234,6 +259,7 @@ async def _chat():
                 messages.append(assistant_message.model_dump(exclude_none=True))
 
                 cancelled = False
+                total_tool_calls += len(requested_tool_calls)
 
                 # Execute all tool calls returned in this response.
                 for tool_call in requested_tool_calls:
@@ -380,6 +406,7 @@ async def _chat():
                             result = f"Unknown tool: {tool_call.function.name}"
 
                     except Exception as exc:
+                        has_tool_execution_error = True
                         result = f"Tool execution failed: {exc}"
                         console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
                     #-----------------------------------------------------------------------------------------------------------

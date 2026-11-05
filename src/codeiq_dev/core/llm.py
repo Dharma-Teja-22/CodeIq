@@ -8,15 +8,29 @@ from codeiq_dev.core.opik_tracker import init_opik, get_opik_client
 # Initialize Opik if configured
 init_opik()
 #-----------------------------------------------------------------------------------------------------------
-# Initialize the shared AsyncOpenAI client
-client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url=GEMINI_BASE_URL,
-)
+_client: Optional[AsyncOpenAI] = None
+
+def get_client() -> AsyncOpenAI:
+    global _client
+    if _client is None or getattr(_client, "_is_closed", False):
+        _client = AsyncOpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url=GEMINI_BASE_URL,
+        )
+    return _client
+
+class _ClientProxy:
+    def __getattr__(self, name: str):
+        return getattr(get_client(), name)
+
+client = _ClientProxy()
 
 async def close_client() -> None:
     """Close the AsyncOpenAI client session gracefully."""
-    await client.close()
+    global _client
+    if _client is not None:
+        await _client.close()
+        _client = None
 
 # Tool schemas available for LLM function calling
 tools: List[Dict[str, Any]] = [
@@ -170,6 +184,8 @@ async def stream_chat_turn(
     Returns (assistant_message, token_usage_dict).
     """
     model_name = model or get_selected_model()
+    import time
+    turn_start = time.time()
     stream = await create_chat_stream(messages=messages, model=model_name, with_tools=with_tools)
     full_content = ""
     requested_tool_calls = []
@@ -198,20 +214,26 @@ async def stream_chat_turn(
                             for tc in delta.tool_calls:
                                 on_tool_call(tc)
 #-----------------------------------------------------------------------------------------------------------
-    # Log LLM span into Opik if parent span or client is available
+    # Log LLM span into Opik if parent_span is available
     if parent_span:
         try:
-            parent_span.span(
+            llm_span = parent_span.span(
                 name="chat_turn_llm",
                 type="llm",
                 input={"messages": messages, "model": model_name, "with_tools": with_tools},
+                start_time=turn_start,
+            )
+            llm_span.end(
                 output={"content": full_content, "tool_calls": [tc.model_dump() if hasattr(tc, "model_dump") else str(tc) for tc in requested_tool_calls]},
                 usage={
                     "prompt_tokens": usage_info["query_tokens"],
                     "completion_tokens": usage_info["completion_tokens"],
                     "total_tokens": usage_info["session_tokens"],
                 },
-                metadata={"model": model_name},
+                metadata={
+                    "model": model_name,
+                    "response_time_sec": round(time.time() - turn_start, 2),
+                },
             )
         except Exception:
             pass

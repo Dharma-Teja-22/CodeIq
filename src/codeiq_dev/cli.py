@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.text import Text
 # from rich.markdown import Markdown
 import json
-
+from codeiq_dev.tools.registry import tools
 import msvcrt
 
 # Ensure standard output uses UTF-8 on Windows
@@ -199,7 +199,31 @@ async def _chat():
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
                     console.print(f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n")
                     break
-
+                
+                # Validate that all requested tools exist in the tools registry
+                invalid_tool_names = [
+                    tc.function.name
+                    for tc in requested_tool_calls
+                    if getattr(tc, "function", None) and tc.function.name not in tools
+                ]
+                if invalid_tool_names:
+                    console.print(f"[yellow]Warning: Hallucinated non-existent tool: {', '.join(invalid_tool_names)}. Re-generating the tool call again ... [/yellow]")
+                    messages.append(assistant_message.model_dump(exclude_none=True))
+                    for tc in requested_tool_calls:
+                        name = getattr(tc,"function", None) and tc.function.name
+                        if name not in tools:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": (
+                                    f"Error: Tool '{name}' does not exist. "
+                                    f"Available tools are: {list(tools.keys())}. "
+                                    "Please call only from the available tools."
+                                ),
+                            })
+                    status_text = "Retrying tool call..."
+                    continue
+                            
                 # Preserve the assistant's tool-call message.
                 messages.append(assistant_message.model_dump(exclude_none=True))
 

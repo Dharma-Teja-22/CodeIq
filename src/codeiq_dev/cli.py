@@ -1,3 +1,4 @@
+from datetime import datetime
 from asyncio import trsock
 from codeiq_dev.utils import repoMap
 from codeiq_dev.tools.git_tools import *
@@ -42,10 +43,28 @@ from codeiq_dev.core.llm import (
     close_client,
     create_chat_stream,
     generate_commit_message,
+    generate_session_title,
     stream_chat_turn,
 )
+from codeiq_dev.core.session import (
+    SESSIONS_DIR,
+    append_message,
+    close_session,
+    create_session,
+    find_session_file,
+    get_session_file_path,
+    list_sessions,
+    load_session,
+    purge_deleted_sessions,
+    restore_session,
+    save_session,
+    set_model,
+    soft_delete_session,
+    update_session_title,
+    update_tokens,
+)
 
-
+# Allows navigating using UP/DOWN arrow keys and selecting with ENTER -  For models
 def select_model_interactive(options: list[str], default_option: str) -> str:
     """
     Renders an interactive arrow-key selection list (like npm create vite).
@@ -113,15 +132,59 @@ def select_model_interactive(options: list[str], default_option: str) -> str:
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
 
-
 # On Windows, silence the known Proactor transport __del__ bug on loop close
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 # Async chat implementation
-async def _chat():
+async def _chat(session_id: Optional[str] = None):
     """Interactive CodeIq chat with Git and File tools using asyncio."""
-    session_tokens = 0
+    is_new_session = session_id is None
+    if session_id:
+        session = load_session(session_id)
+    else:
+        session = create_session(save=False)
+
+
+    current_model = get_selected_model()
+    session["model_name"] = current_model
+
+    if not is_new_session:
+        set_model(session, current_model)
+        session_file_path = get_session_file_path(session["session_id"])
+        console.print(f"[dim]Session: {session['session_id']} | Path: {session_file_path}[/dim]")
+    
+    repo_structure = repoMap.get_all_paths()
+    system_prompt = (
+        "You are CodeIq, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
+        "For File Operations and Error Fixing: When the user asks you to run a file and fix/resolve its errors (e.g. 'run test.py file and resolve the issues'): "
+        "1. Always work directly on the target file itself. NEVER create a new or duplicate file (e.g., do NOT create payroll_app.py or test_fixed.py). "
+        "2. Read the file using read_file to inspect its code and understand its formatting. "
+        "3. When you identify bugs or after seeing test/run failures, use replace_content to apply fixes directly to that exact same file in-place, keeping sufficient context in old_code. "
+        "4. After modifying the file, run the target file again using executeTool to verify that all errors are resolved. "
+        "5. Inform the user clearly and politely: explain what errors were found, state that you updated the file in-place, and show that the rerun succeeded. "
+        "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
+        "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
+        "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
+        "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
+        "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
+        f"Here is the project structure: {repo_structure}, if there is any folder which might be related to the request, please explore it and provide the response."
+        "For Web Research and URL Content Extraction:"
+        "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
+        "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
+        "2. Direct Webpage Reading (fetchWebpageMarkdown): When the user provides a specific URL (or when a webSearch result points to an authoritative documentation/article URL that needs deep reading), invoke fetchWebpageMarkdown to extract its full clean markdown content via Jina AI Reader. "
+        "3. Synthesis & Complete Delivery: Never stop after executing search or URL fetching. Once tool results are returned, immediately synthesize the retrieved facts into a thorough, well-structured, and complete response with headings, bullet points, code snippets (if applicable), and references. Always complete your full explanation without cutting off or leaving the summary incomplete."
+        "**NOTE**: Ensure that all responses are well-structured, clearly defined, and formatted exclusively in Markdown."
+    )
+
+    # Initialize messages list with system prompt and any resumed session messages
+    saved_msgs = [m for m in session.get("messages", []) if m.get("role") != "system"]
+    messages = [{"role": "system", "content": system_prompt}] + saved_msgs
+
+    if saved_msgs:
+        console.print(f"[green]Resumed session with {len(saved_msgs)} previous messages.[/green]\n")
+
+    session_tokens = session.get("token_usage", {}).get("session_tokens", 0)
 
     while True:
         prompt = await asyncio.to_thread(
@@ -129,39 +192,54 @@ async def _chat():
             typer.style("User", fg=typer.colors.CYAN, bold=True),
         )
 
-        if prompt.strip().lower() in ("exit", "quit","bye","close"):
-            console.print("[yellow]Chat ended.[/yellow]")
+        clean_prompt = prompt.strip().lower()
+        if clean_prompt in ("exit", "quit", "bye", "close"):
+            console.print("[yellow]Exited chat.[/yellow]")
             break
+        elif clean_prompt in ("close session", "end session"):
+            close_session(session["session_id"])
+            console.print(f"[bold yellow]Session '{session['session_id']}' marked as closed.[/bold yellow]")
+            break
+        elif clean_prompt in ("delete", "delete session", "drop session"):
+            soft_delete_session(session["session_id"])
+            console.print(f"[bold red]Session '{session['session_id']}' soft-deleted.[/bold red]")
+            break
+        
+        # Append user prompt to messages and session JSON
+        user_message = {"role": "user", "content": prompt}
+        messages.append(user_message)
+        # append_message(session, user_message)
 
-        repo_structure = repoMap.get_all_paths()
-
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are CodeIq, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
-                    "For File Operations and Error Fixing: When the user asks you to run a file and fix/resolve its errors (e.g. 'run test.py file and resolve the issues'): "
-                    "1. Always work directly on the target file itself. NEVER create a new or duplicate file (e.g., do NOT create payroll_app.py or test_fixed.py). "
-                    "2. Read the file using read_file to inspect its code and understand its formatting. "
-                    "3. When you identify bugs or after seeing test/run failures, use replace_content to apply fixes directly to that exact same file in-place, keeping sufficient context in old_code. "
-                    "4. After modifying the file, run the target file again using executeTool to verify that all errors are resolved. "
-                    "5. Inform the user clearly and politely: explain what errors were found, state that you updated the file in-place, and show that the rerun succeeded. "
-                    "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
-                    "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
-                    "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
-                    "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
-                    "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
-                    f"Here is the project structure: {repo_structure}, if there is any folder which might be related to the request, please explore it and provide the response."
-                    "For Web Research and URL Content Extraction:"
-                    "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
-                    "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
-                    "2. Direct Webpage Reading (fetchWebpageMarkdown): When the user provides a specific URL (or when a webSearch result points to an authoritative documentation/article URL that needs deep reading), invoke fetchWebpageMarkdown to extract its full clean markdown content via Jina AI Reader. "
-                    "3. Synthesis & Complete Delivery: Never stop after executing search or URL fetching. Once tool results are returned, immediately synthesize the retrieved facts into a thorough, well-structured, and complete response with headings, bullet points, code snippets (if applicable), and references. Always complete your full explanation without cutting off or leaving the summary incomplete."
-                    "**NOTE**: Ensure that all responses are well-structured, clearly defined, and formatted exclusively in Markdown."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
+        if is_new_session:
+            try:
+                ai_title = await generate_session_title(prompt, model=current_model)
+                # new_session_id = update_session_title(session, ai_title)
+                # console.print(f"[dim]Session Title: {ai_title} | ID: {new_session_id}[/dim]")
+            except Exception:
+                ai_title="New Session"
+            clean_title = "".join(c for c in ai_title if c.isalnum() or c in (" ", "-", "_")).strip()
+            if not clean_title:
+                clean_title='session'
+            project_name = session.get("project_name")
+            session["title"] = ai_title
+            session["session_id"] = f"{project_name}-{clean_title}"
+            
+            # Append user message in-memory without saving yet
+            session.setdefault("messages", []).append(user_message)
+            session["updated_at"] = datetime.now().isoformat()
+            
+            # Now create and persist the session file for the first time
+            save_session(session)
+            
+            session_file_path = get_session_file_path(session["session_id"])
+            console.print(f"[dim]Session Title: {ai_title} | Path: {session_file_path}[/dim]")
+            is_new_session = False
+        else:
+            # Resumed/existing session: append and save directly
+            append_message(session, user_message)
+        
+        # If session has default/initial title, generate AI title and rename file to <projectName>-<title>
+        # if session.get("title") in ("New Session", "Untitled Session", None):
 
         query_tokens = 0
         completion_tokens = 0
@@ -169,6 +247,7 @@ async def _chat():
         
         status_text = "Thinking..."
         current_model = get_selected_model()
+        set_model(session, current_model)
         console.print(Text("Assistant:", style="bold cyan"))
         # Inner loop handles all tool-calling rounds for this question.
         while True:
@@ -218,9 +297,25 @@ async def _chat():
 
                 # No more tool calls: display tokens and end round.
                 if not requested_tool_calls:
+                    # Accumulate session tokens
+                    accum_prompt = session.get("session_prompt_tokens", 0) + query_tokens
+                    accum_comp = session.get("session_completion_tokens", 0) + completion_tokens
+                    accum_total = session.get("total_tokens", 0) + (query_tokens + completion_tokens)
+
                     if (not full_content.strip()) and status_text != "Thinking...":
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
-                    console.print(f"[dim]Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session: {session_tokens}[/dim]\n")
+                    console.print(f"[dim]Turn Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session Total: {accum_total}[/dim]\n")
+                    # Save assistant message to session JSON
+                    asst_dump = assistant_message.model_dump(exclude_none=True)
+                    messages.append(asst_dump)
+                    append_message(session, asst_dump)
+                    update_tokens(
+                        session,
+                        prompt_tokens=accum_prompt,
+                        completion_tokens=accum_comp,
+                        total_tokens=accum_total,
+                        increment_requests=True,
+                    )
                     break
                 
                 # Validate that all requested tools exist in the tools registry
@@ -231,11 +326,13 @@ async def _chat():
                 ]
                 if invalid_tool_names:
                     console.print(f"[yellow]Warning: Hallucinated non-existent tool: {', '.join(invalid_tool_names)}. Re-generating the tool call again ... [/yellow]")
-                    messages.append(assistant_message.model_dump(exclude_none=True))
+                    asst_dump = assistant_message.model_dump(exclude_none=True)
+                    messages.append(asst_dump)
+                    append_message(session, asst_dump)
                     for tc in requested_tool_calls:
                         name = getattr(tc,"function", None) and tc.function.name
                         if name not in tools:
-                            messages.append({
+                            err_msg = {
                                 "role": "tool",
                                 "tool_call_id": tc.id,
                                 "content": (
@@ -243,12 +340,16 @@ async def _chat():
                                     f"Available tools are: {list(tools.keys())}. "
                                     "Please call only from the available tools."
                                 ),
-                            })
+                            }
+                            messages.append(err_msg)
+                            append_message(session, err_msg)
                     status_text = "Retrying tool call..."
                     continue
                             
                 # Preserve the assistant's tool-call message.
-                messages.append(assistant_message.model_dump(exclude_none=True))
+                asst_dump = assistant_message.model_dump(exclude_none=True)
+                messages.append(asst_dump)
+                append_message(session, asst_dump)
 
                 cancelled = False
 
@@ -401,7 +502,9 @@ async def _chat():
                         result = f"Tool execution failed: {exc}"
                         console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
 
-                    messages.append({"role": "tool", "tool_call_id": tool_call.id, "content": str(result)})
+                    tool_resp = {"role": "tool", "tool_call_id": tool_call.id, "content": str(result)}
+                    messages.append(tool_resp)
+                    append_message(session, tool_resp)
 
                     if cancelled:
                         break
@@ -415,18 +518,160 @@ async def _chat():
                 console.print(f"[bold red]Error:[/bold red] {exc}")
                 break
 
+# Chat Loop
 @app.command()
-def chat():
-    """Start an interactive CodeIq chat with Git and File tools."""
+def chat(
+    session: Optional[str] = typer.Option(
+        None, "--session", "-s", help="Resume a specific session by ID or prefix"
+    ),
+    resume: bool = typer.Option(
+        False, "--resume", "-r", help="Resume the most recent session"
+    ),
+):
+    """
+    Start an interactive CodeIq chat session.
+    
+    Usage:
+        codeiq chat                      # Starts a new session
+        codeiq chat --resume / -r        # Continues your latest session
+        codeiq chat --session <id> / -s  # Resumes a specific session
+    """
+    target_session_id = session
+
+    if resume and not target_session_id:
+        existing = list_sessions()
+        if existing:
+            target_session_id = existing[0]["session_id"]
+            console.print(f"[bold cyan]Resuming latest session:[/bold cyan] {target_session_id}")
+        else:
+            console.print("[yellow]No existing sessions found. Starting a new one.[/yellow]")
+    elif target_session_id:
+        session_file = find_session_file(target_session_id)
+        if session_file:
+            target_session_id = session_file.stem
+            console.print(f"[bold cyan]Resuming session:[/bold cyan] {target_session_id}")
+        else:
+            console.print(f"[bold red]Error:[/bold red] Session '{target_session_id}' not found. Starting a new one.")
+            target_session_id = None
+
     async def runner():
         try:
-            await _chat()
+            await _chat(session_id=target_session_id)
         finally:
             # pyrefly: ignore[not-async]
             await close_client()
     asyncio.run(runner())
 
-async def _generate_response(prompt: str):
+# Command to work with sessions (get list of sessions | soft delete | resume | direct delete | ... )
+@app.command(name="sessions")
+def sessions(
+    close: Optional[str] = typer.Option(
+        None, "--close", "-c", help="Close a specific session by ID or prefix"
+    ),
+    delete: Optional[str] = typer.Option(
+        None, "--delete", "-d", help="Soft delete a session (it will no longer be listed or resumeable)"
+    ),
+    restore: Optional[str] = typer.Option(
+        None, "--restore", help="Restore a soft-deleted session by ID or prefix"
+    ),
+    purge: Optional[str] = typer.Option(
+        None,
+        "--purge",
+        help="Permanently delete a soft-deleted session by ID or prefix. Use '--purge all' to delete all soft-deleted sessions.",
+    ),
+    show_deleted: bool = typer.Option(
+        False, "--show-deleted", help="Include soft-deleted sessions in the list"
+    ),
+):
+    """
+    List, close, soft-delete, or permanently purge chat sessions in C:\\Users\\<user>\\.codeiq\\sessions.
+    
+    Usage:
+        codeiq sessions               # List session IDs with status
+        codeiq sessions --close <id>  # Mark a session as closed
+        codeiq sessions --delete <id> # Soft delete a session
+        codeiq sessions --purge <id>  # Permanently remove a soft-deleted session
+        codeiq sessions --purge all   # Permanently remove all soft-deleted sessions
+        codeiq sessions --restore <id># Restore a soft-deleted session
+    """
+    # 1. Permanent purge of soft-deleted session(s)
+    if purge:
+        if purge.strip().lower() == "all":
+            purged = purge_deleted_sessions()
+            if purged:
+                console.print(f"[bold green]✓ Permanently removed {len(purged)} soft-deleted session(s):[/bold green]")
+                for pid in purged:
+                    console.print(f"  - {pid}")
+            else:
+                console.print("[yellow]No soft-deleted sessions found to purge.[/yellow]")
+            return
+        else:
+            purged = purge_deleted_sessions(session_id=purge)
+            if purged:
+                console.print(f"[bold green]✓ Permanently removed session: {purged[0]}[/bold green]")
+            else:
+                console.print(f"[bold red]Error:[/bold red] Soft-deleted session '{purge}' not found.")
+            return
+
+    # 2. Soft delete
+    if delete:
+        res = soft_delete_session(delete)
+        if not res:
+            console.print(f"[bold red]Error:[/bold red] Session '{delete}' not found in {SESSIONS_DIR}")
+            return
+        console.print(f"[bold green]✓ Session '{res}' has been soft-deleted.[/bold green]")
+        console.print("[dim]It will no longer appear in 'codeiq sessions' or be opened via '--resume'/'--session'.[/dim]")
+        return
+
+    # 3. Restore soft-deleted
+    if restore:
+        res = restore_session(restore)
+        if not res:
+            console.print(f"[bold red]Error:[/bold red] Session '{restore}' not found in {SESSIONS_DIR}")
+            return
+        console.print(f"[bold green]✓ Session '{res}' has been restored.[/bold green]")
+        return
+
+    # 4. Close session
+    if close:
+        res = close_session(close)
+        if not res:
+            console.print(f"[bold red]Error:[/bold red] Session '{close}' not found in {SESSIONS_DIR}")
+            return
+        console.print(f"[bold green]✓ Session '{res}' is now closed.[/bold green]")
+        return
+
+    # 5. List sessions - render clean session ID and status (no table data)
+    session_list = list_sessions(include_deleted=show_deleted)
+    if not session_list:
+        console.print(f"[yellow]No saved sessions found[/yellow]")
+        return
+
+    console.print(f"[bold cyan]Sessions ({SESSIONS_DIR}):[/bold cyan]\n")
+    for s in session_list:
+        if s.get("is_deleted"):
+            status_text = "[bold red][deleted][/bold red]"
+        elif s.get("status") == "closed":
+            status_text = "[bold yellow][closed][/bold yellow]"
+        else:
+            status_text = "[bold green][active][/bold green]"
+
+        console.print(f"• [cyan]{s['session_id']}[/cyan] {status_text}")
+
+    console.print(
+        "\n[dim]Resume: [bold cyan]codeiq chat -s <id>[/bold cyan] | Purge all deleted: [bold cyan]codeiq sessions --purge all[/bold cyan][/dim]"
+    )
+
+async def _generate_response(prompt: str) -> None:
+    """
+    Stream and print a one-off AI completion response for a given prompt without tool calling.
+
+    Args:
+        prompt (str): The user query or instruction sent to the AI model.
+
+    Returns:
+        None: Streams tokens directly to standard console output and prints token usage.
+    """
     current_model = get_selected_model()
     typer.echo(f"\nQ: {prompt}")
 
@@ -472,6 +717,7 @@ def generate_response(prompt: str):
     """
     asyncio.run(_generate_response(prompt))
 
+# For adding and changing the models
 @app.command(name="models")
 def models(
     add: Optional[str] = typer.Option(

@@ -188,3 +188,41 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
         return (response.choices[0].message.content or "").strip().strip('"').strip("'")
     except Exception as e:
         return f"Error generating commit message: {str(e)}"
+
+
+async def generate_session_title(user_prompt: str, model: Optional[str] = None) -> str:
+    """
+    Generate a concise 2-5 word title for a chat session based on the first user query.
+
+    Args:
+        user_prompt (str): The initial prompt submitted by the user.
+        model (Optional[str]): AI model identifier to use. Defaults to selected model.
+
+    Returns:
+        str: Concise title string without quotes or punctuation.
+    """
+    try:
+        model_name = model or get_selected_model()
+        cleaned_prompt = user_prompt.strip()[:300]
+        response = await client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Generate a concise 2 to 5 word title summarizing the user's intent or topic. "
+                        "Return ONLY the plain title text in title case. Do not wrap in quotes or add markdown or trailing punctuation."
+                        "NOTE: ensure never provide spacing between the words(Filename must don't have speacing instead you can replace them using '_' or '-')"
+                    ),
+                },
+                {"role": "user", "content": cleaned_prompt},
+            ],
+        )
+        title = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip("`")
+        # Sanitize for safe filenames (remove illegal characters: \ / : * ? " < > |)
+        sanitized = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()
+        return sanitized or "New Session"
+    except Exception:
+        # Fallback to truncated first words if AI call fails
+        words = user_prompt.strip().split()
+        return " ".join(words[:4]).title() or "New Session"

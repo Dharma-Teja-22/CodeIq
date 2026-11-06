@@ -194,8 +194,6 @@ async def _chat():
                         else:
                             live.update(Markdown(final_response))
 
-                            
-
                     assistant_message, usage_info = await stream_chat_turn(
                         messages=messages,
                         model=current_model,
@@ -203,8 +201,7 @@ async def _chat():
                         on_token=handle_token,
                     )
                     if live is not None:
-                    live.stop()
-
+                        live.stop()
 
                     requested_tool_calls = assistant_message.tool_calls
                     full_content = assistant_message.content

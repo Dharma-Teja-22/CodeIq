@@ -1,6 +1,8 @@
 from codeiq_dev.tools.miscellaneous_tools import executeTool
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.git_tools import gitOperation
+from codeiq_dev.tools.web_search_tool import DDGSearch, read_url
+
 from typing import Dict, Any, List
 
 # Tool schemas available for LLM function calling
@@ -101,6 +103,41 @@ tool_schema: List[Dict[str, Any]] = [
             },
         },
     },
+        {
+        "type": "function",
+        "function": {
+            "name": "webSearch",
+            "description": "Search the web using DuckDuckGo to obtain up-to-date documentation, error fixes, articles, and answers.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The search query string."
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fetchWebpageMarkdown",
+            "description": "Fetch and extract clean markdown content and text from a specific web URL using Jina AI Reader.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The complete HTTP/HTTPS URL of the webpage to fetch."
+                    }
+                },
+                "required": ["url"],
+            },
+        },
+    },
+
 ]
 
 # Tools
@@ -108,4 +145,6 @@ tools = {
     "gitOperations": gitOperation,
     "fileOperations": fileOperation,
     "executeTool": executeTool,
+    "webSearch": DDGSearch,
+    "fetchWebpageMarkdown": read_url
 }

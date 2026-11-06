@@ -3,6 +3,8 @@ from codeiq_dev.utils import repoMap
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.miscellaneous_tools import executeTool
+from codeiq_dev.tools.web_search_tool import DDGSearch, read_url
+
 import asyncio
 import sys
 import os
@@ -10,7 +12,8 @@ from pathlib import Path
 import typer
 from rich.console import Console
 from rich.text import Text
-# from rich.markdown import Markdown
+from rich.markdown import Markdown
+from rich.live import Live
 import json
 from codeiq_dev.tools.registry import tools
 import msvcrt
@@ -149,6 +152,12 @@ async def _chat():
                     "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
                     "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
                     f"Here is the project structure: {repo_structure}, if there is any folder which might be related to the request, please explore it and provide the response."
+                    "For Web Research and URL Content Extraction:"
+                    "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
+                    "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
+                    "2. Direct Webpage Reading (fetchWebpageMarkdown): When the user provides a specific URL (or when a webSearch result points to an authoritative documentation/article URL that needs deep reading), invoke fetchWebpageMarkdown to extract its full clean markdown content via Jina AI Reader. "
+                    "3. Synthesis & Complete Delivery: Never stop after executing search or URL fetching. Once tool results are returned, immediately synthesize the retrieved facts into a thorough, well-structured, and complete response with headings, bullet points, code snippets (if applicable), and references. Always complete your full explanation without cutting off or leaving the summary incomplete."
+                    "**NOTE**: Ensure that all responses are well-structured, clearly defined, and formatted exclusively in Markdown."
                 ),
             },
             {"role": "user", "content": prompt},
@@ -156,7 +165,8 @@ async def _chat():
 
         query_tokens = 0
         completion_tokens = 0
-
+        final_response = ""
+        
         status_text = "Thinking..."
         current_model = get_selected_model()
         console.print(Text("Assistant:", style="bold cyan"))
@@ -168,10 +178,23 @@ async def _chat():
                     f"[bold cyan]{status_text}[/bold cyan]",
                     spinner="arc",
                 ) as status_spinner:
+                    live: Optional[Live] = None
                     def handle_token(tok: str):
+                        nonlocal final_response, live
+                        if not tok:
+                            return
+                        # Stop thinking spinner before streaming text
                         if status_spinner and status_spinner._live.is_started:
                             status_spinner.stop()
-                        console.print(tok, style="green", end="")
+                        final_response += tok
+                        # Start Live display once on first token
+                        if live is None:
+                            live = Live(Markdown(final_response), console=console, refresh_per_second=10)
+                            live.start()
+                        else:
+                            live.update(Markdown(final_response))
+
+                            
 
                     assistant_message, usage_info = await stream_chat_turn(
                         messages=messages,
@@ -179,6 +202,9 @@ async def _chat():
                         with_tools=True,
                         on_token=handle_token,
                     )
+                    if live is not None:
+                    live.stop()
+
 
                     requested_tool_calls = assistant_message.tool_calls
                     full_content = assistant_message.content
@@ -358,6 +384,19 @@ async def _chat():
                                 console.print("[red]Command finished with an error or rejection.[/red]")
                             else:
                                 console.print("[green]Command executed successfully.[/green]")
+                        elif tool_call.function.name == "webSearch":
+                            query = arguments.get("query", "")
+                            console.print(f"[cyan]Searching the web for:[/cyan] {query}")
+                            search_results = await asyncio.to_thread(DDGSearch, query=query)
+                            result = json.dumps(search_results, indent=2)
+                            console.print(f"[green]Retrieved {len(search_results)} search results.[/green]")
+
+                        elif tool_call.function.name == "fetchWebpageMarkdown":
+                            target_url = arguments.get("url", "")
+                            console.print(f"[cyan]Fetching webpage markdown from:[/cyan] {target_url}")
+                            result = await asyncio.to_thread(read_url, target_url=target_url)
+                            console.print(f"[green]Successfully loaded content from '{target_url}'.[/green]")
+
                         else:
                             result = f"Unknown tool: {tool_call.function.name}"
 

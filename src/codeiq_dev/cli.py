@@ -41,6 +41,7 @@ from codeiq_dev.core.llm import (
     generate_session_title,
     stream_chat_turn,
 )
+from codeiq_dev.core.compaction import maybe_compact_session
 from codeiq_dev.core.session import (
     SESSIONS_DIR,
     append_message,
@@ -311,6 +312,20 @@ async def _chat(session_id: Optional[str] = None):
                         total_tokens=accum_total,
                         increment_requests=True,
                     )
+
+                    try:
+                        compacted = await maybe_compact_session(
+                            session,
+                            current_context_tokens=query_tokens or None,
+                        )
+                        if compacted:
+                            messages = [
+                                {"role": "system", "content": system_prompt}
+                            ] + [m for m in session.get("messages", []) if m.get("role") != "system"]
+                            console.print("[dim]⚡ Conversation context compacted below token threshold.[/dim]")
+                    except Exception as comp_err:
+                        pass
+
                     break
                 
                 # Validate that all requested tools exist in the tools registry

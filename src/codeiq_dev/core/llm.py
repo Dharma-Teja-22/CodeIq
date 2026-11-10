@@ -21,6 +21,25 @@ client = AsyncOpenAI(
     base_url=settings.GEMINI_BASE_URL,
 )
 
+_ALLOWED_MESSAGE_KEYS = frozenset({"role", "content", "name", "tool_call_id", "tool_calls"})
+
+
+def to_llm_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    Sanitize messages for the LLM API by stripping internal metadata.
+
+    Args:
+        messages (List[Dict[str, Any]]): Raw session messages.
+
+    Returns:
+        List[Dict[str, Any]]: Messages containing only keys accepted by OpenAI chat APIs.
+    """
+    return [
+        {k: v for k, v in message.items() if k in _ALLOWED_MESSAGE_KEYS}
+        for message in messages
+    ]
+
+
 async def close_client() -> None:
     """
     Close the AsyncOpenAI client session gracefully.
@@ -119,7 +138,7 @@ async def create_chat_stream(
     model_name = settings.MODEL
     kwargs: Dict[str, Any] = {
         "model": model_name,
-        "messages": messages,
+        "messages": to_llm_messages(messages),
         "stream": True,
         "stream_options": {"include_usage": True},
     }

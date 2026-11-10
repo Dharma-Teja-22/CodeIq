@@ -1,6 +1,6 @@
 from ddgs import DDGS
 import requests
-from codeiq_dev.core.settings import JINA_API_KEY
+from codeiq_dev.core.settings import settings
 import truststore
 truststore.inject_into_ssl()
 
@@ -46,7 +46,7 @@ def read_url(target_url: str):
     """
     try:
         headers = {
-            "Authorization": f"Bearer {JINA_API_KEY}",
+            "Authorization": f"Bearer {settings.JINA_API_KEY}",
             "Accept": "application/json"
         }
         reader_url = f"https://r.jina.ai/{target_url}"

@@ -1,12 +1,12 @@
 from dotenv import load_dotenv
 from openai import OpenAI
 import subprocess
-import os
+from codeiq_dev.core.settings import settings
 
 load_dotenv()
 
 client = OpenAI(
-    api_key=os.getenv("GEMINI_API_KEY"),
+    api_key=settings.GEMINI_API_KEY,
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
 )
 

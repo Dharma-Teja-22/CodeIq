@@ -33,12 +33,7 @@ console = Console()
 from typing import Optional
 
 from codeiq_dev.core.settings import *
-from codeiq_dev.core.config import (
-    add_model_to_config,
-    get_available_models,
-    get_selected_model,
-    set_selected_model,
-)
+from codeiq_dev.core.config import load_config, save_config, DEFAULT_PROVIDER
 from codeiq_dev.core.llm import (
     close_client,
     create_chat_stream,
@@ -146,7 +141,7 @@ async def _chat(session_id: Optional[str] = None):
         session = create_session(save=False)
 
 
-    current_model = get_selected_model()
+    current_model = settings.MODEL
     session["model_name"] = current_model
 
     if not is_new_session:
@@ -246,7 +241,7 @@ async def _chat(session_id: Optional[str] = None):
         final_response = ""
         
         status_text = "Thinking..."
-        current_model = get_selected_model()
+        current_model = settings.MODEL
         set_model(session, current_model)
         console.print(Text("Assistant:", style="bold cyan"))
         # Inner loop handles all tool-calling rounds for this question.
@@ -428,7 +423,6 @@ async def _chat(session_id: Optional[str] = None):
                                 console.print(f"[green]{result}[/green]")
                             else:
                                 result = f"Unsupported file operation: {operation}"
-
                         elif tool_call.function.name == "gitOperations":
                             operation = arguments["operation"]
                             console.print(f"[cyan]Executing Git operation: {operation}[/cyan]")
@@ -488,13 +482,11 @@ async def _chat(session_id: Optional[str] = None):
                             search_results = await asyncio.to_thread(DDGSearch, query=query)
                             result = json.dumps(search_results, indent=2)
                             console.print(f"[green]Retrieved {len(search_results)} search results.[/green]")
-
                         elif tool_call.function.name == "fetchWebpageMarkdown":
                             target_url = arguments.get("url", "")
                             console.print(f"[cyan]Fetching webpage markdown from:[/cyan] {target_url}")
                             result = await asyncio.to_thread(read_url, target_url=target_url)
                             console.print(f"[green]Successfully loaded content from '{target_url}'.[/green]")
-
                         else:
                             result = f"Unknown tool: {tool_call.function.name}"
 
@@ -515,6 +507,8 @@ async def _chat(session_id: Optional[str] = None):
                 status_text = "Processing response..."
 
             except Exception as exc:
+                # Display the exact underlying error message (e.g. 429 Rate Limit / Quota Exceeded)
+                # when tenacity retries are exhausted or other exceptions occur.
                 console.print(f"[bold red]Error:[/bold red] {exc}")
                 break
 
@@ -672,7 +666,7 @@ async def _generate_response(prompt: str) -> None:
     Returns:
         None: Streams tokens directly to standard console output and prints token usage.
     """
-    current_model = get_selected_model()
+    current_model = settings.MODEL
     typer.echo(f"\nQ: {prompt}")
 
     p_tokens = 0
@@ -738,19 +732,40 @@ def models(
         if not model_name:
             console.print("[bold red]Error:[/bold red] Model name cannot be empty.")
             return
-
-        added = add_model_to_config(model_name, provider="gemini")
+        try:
+            config = load_config()
+            provider_data = config.setdefault("providers", {}).setdefault("gemini", {})
+            models_list = provider_data.setdefault("models", [])
+            if model_name in models_list:
+                added = False
+            else:
+                models_list.append(model_name)
+                save_config(config)
+                added = True
+        except Exception:
+            added = False
         if added:
             console.print(f"[bold green]✓ Added model '{model_name}' under Gemini provider in JSON.[/bold green]")
         else:
             console.print(f"[dim]Model '{model_name}' already exists under Gemini provider.[/dim]")
         return
 
-    available_models = get_available_models(provider="gemini")
-    current_model = get_selected_model(provider="gemini")
+    try:
+        config = load_config()
+        models = config.get("providers", {}).get("gemini", {}).get("models", [])
+        available_models = list(models) if isinstance(models, list) else []
+    except Exception:
+        available_models = []
+    current_model = settings.MODEL
     try:
         chosen = select_model_interactive(available_models, default_option=current_model)
-        set_selected_model(chosen, provider="gemini")
+        try:
+            config = load_config()
+            config["default_model"] = chosen
+            config.pop("model", None)
+            save_config(config)
+        except Exception as e:
+            console.print(f"[bold red]Error setting selected model: {e}[/bold red]")
         console.print(f"\n[bold green]✓[/bold green] Selected model: [bold cyan]{chosen}[/bold cyan]")
     except KeyboardInterrupt:
         console.print("\n[dim]Model selection cancelled.[/dim]")

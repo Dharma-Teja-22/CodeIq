@@ -1,13 +1,24 @@
 from openai import AsyncOpenAI
 from typing import Dict, Any, List, Optional
-from codeiq_dev.core.settings import *
-from codeiq_dev.core.config import get_selected_model
+import logging
+# Tenacity : Exponential Backoff with built in Jitter 
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_random_exponential,
+    retry_if_exception,
+    before_log,
+    after_log
+)
+from codeiq_dev.core.settings import settings
 from codeiq_dev.tools.registry import tool_schema as tools
+
+logger = logging.getLogger(__name__)
 
 # Initialize the shared AsyncOpenAI client
 client = AsyncOpenAI(
-    api_key=GEMINI_API_KEY,
-    base_url=GEMINI_BASE_URL,
+    api_key=settings.GEMINI_API_KEY,
+    base_url=settings.GEMINI_BASE_URL,
 )
 
 async def close_client() -> None:
@@ -51,13 +62,51 @@ class AssistantMessage:
         return d
 
 
+def _is_rate_limit_or_resource_exhausted(exception: Exception) -> bool:
+    """
+    Custom retry predicate for tenacity.
+    Returns True if the exception indicates rate limiting (429), resource exhaustion, or quota issues.
+    Explicitly ignores 401 (Unauthorized), 404 (Not Found),..etc.
+    """
+    error_str = str(exception).lower()
+    
+    # Do not retry on 401 or 404 errors
+    if "401" in error_str or "unauthorized" in error_str or "404" in error_str or "not found" in error_str:
+        return False
+        
+    # Retry on 429, resource exhaustion, or quota errors
+    if "429" in error_str or "exhausted" in error_str or "quota" in error_str:
+        return True
+        
+    return False
+
+
+@retry(
+    stop=stop_after_attempt(2), # Stop retrying after 5 failed attempts
+    # Exponential backoff with random jitter to prevent sync spikes / thundering herd
+    wait=wait_random_exponential(multiplier=1, max=16),
+    retry=retry_if_exception(_is_rate_limit_or_resource_exhausted),
+    before=before_log(logger, logging.INFO),
+    after = after_log(logger, logging.WARNING),
+    # Hook invoked right before sleeping between retries
+    # before_sleep=_before_sleep_log,
+    reraise=True # reraise=True ensures that if all attempts fail, the final exception is raised to the caller
+)
+async def _create_chat_completion_with_retry(kwargs: Dict[str, Any]):
+    """
+    Helper wrapper around client.chat.completions.create protected by tenacity 
+    jittered exponential backoff for 429 / resource exhausted / quota errors.
+    """
+    return await client.chat.completions.create(**kwargs)
+
+
 async def create_chat_stream(
     messages: List[Dict[str, Any]],
     model: Optional[str] = None,
     with_tools: bool = True,
 ):
     """
-    Initiate an async streaming chat completion via the OpenAI client.
+    Initiate an async streaming chat completion via the OpenAI client with exponential backoff and jitter.
 
     Args:
         messages (List[Dict[str, Any]]): Conversation history messages.
@@ -67,7 +116,7 @@ async def create_chat_stream(
     Returns:
         AsyncStream: Asynchronous iterator of chat completion chunks.
     """
-    model_name = model or get_selected_model()
+    model_name = settings.MODEL
     kwargs: Dict[str, Any] = {
         "model": model_name,
         "messages": messages,
@@ -78,7 +127,7 @@ async def create_chat_stream(
         kwargs["tools"] = tools
         kwargs["tool_choice"] = "auto"
 
-    return await client.chat.completions.create(**kwargs)
+    return await _create_chat_completion_with_retry(kwargs)
 
 
 async def stream_chat_turn(
@@ -131,13 +180,19 @@ async def stream_chat_turn(
                                     on_tool_call(tc)
 
         return AssistantMessage(full_content, requested_tool_calls), usage_info
+
     except Exception as e:
-        return AssistantMessage(f"Error communicating with AI service: {str(e)}", []), {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}
+        # Capture the exact underlying exception message (e.g. 429 Rate Limit, Quota Exceeded, etc.)
+        # and return it as the assistant message so it renders directly in the UI.
+        error_msg = f"Error communicating with AI service: {str(e)}"
+        raise Exception(error_msg)
+        # return AssistantMessage(error_msg, []), {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}
 
 
 async def generate_commit_message(diff: str, model: Optional[str] = None) -> str:
     """
     Generate a conventional Git commit message from a git diff.
+    Protected by tenacity exponential backoff with jitter for 429 / resource exhaustion.
 
     Args:
         diff (str): The staged changes diff text.
@@ -147,7 +202,7 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
         str: Concise Conventional Commit message string.
     """
     try:
-        model_name = model or get_selected_model()
+        model_name = settings.MODEL
         diff_lines = diff.splitlines()
         limited_diff = "\n".join(diff_lines[:200])
         prompt = f'''Generate a short, descriptive Git commit message based on the staged changes. Follow Conventional Commits format.
@@ -173,9 +228,10 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                     Staged changes:
                     {limited_diff}
                 '''
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=[
+        # Use our retry-wrapped helper to protect against rate limits and resource exhaustion
+        response = await _create_chat_completion_with_retry({
+            "model": model_name,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -184,7 +240,7 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                 },
                 {"role": "user", "content": prompt},
             ],
-        )
+        })
         return (response.choices[0].message.content or "").strip().strip('"').strip("'")
     except Exception as e:
         return f"Error generating commit message: {str(e)}"
@@ -193,6 +249,7 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
 async def generate_session_title(user_prompt: str, model: Optional[str] = None) -> str:
     """
     Generate a concise 2-5 word title for a chat session based on the first user query.
+    Protected by tenacity exponential backoff with jitter for 429 / resource exhaustion.
 
     Args:
         user_prompt (str): The initial prompt submitted by the user.
@@ -202,11 +259,13 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
         str: Concise title string without quotes or punctuation.
     """
     try:
-        model_name = model or get_selected_model()
+        model_name = settings.SMALL_MODEL
         cleaned_prompt = user_prompt.strip()[:300]
-        response = await client.chat.completions.create(
-            model=model_name,
-            messages=[
+        
+        # Use our retry-wrapped helper to protect against rate limits and resource exhaustion
+        response = await _create_chat_completion_with_retry({
+            "model": model_name,
+            "messages": [
                 {
                     "role": "system",
                     "content": (
@@ -217,7 +276,7 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
                 },
                 {"role": "user", "content": cleaned_prompt},
             ],
-        )
+        })
         title = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip("`")
         # Sanitize for safe filenames (remove illegal characters: \ / : * ? " < > |)
         sanitized = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()

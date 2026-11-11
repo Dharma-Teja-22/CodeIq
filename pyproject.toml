@@ -8,10 +8,14 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "ddgs>=9.16.1",
     "openai>=3.38.0",
     "opik>=2.2.139",
     "python-dotenv>=1.2.4",
+    "requests>=2.34.2",
     "rich>=15.0.0",
+    "tenacity>=9.2.1",
+    "tiktoken>=0.14.0",
     "typer[all]>=0.27.3",
 ]
 

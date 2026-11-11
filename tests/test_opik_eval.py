@@ -13,7 +13,8 @@ import pytest
 from typing import Dict, Any, List
 
 from codeiq_dev.core.opik_tracker import init_opik, get_opik_client
-from codeiq_dev.core.llm import stream_chat_turn, close_client, get_selected_model
+from codeiq_dev.core.llm import stream_chat_turn, close_client
+from codeiq_dev.core.settings import settings
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.git_tools import gitOperation
 from codeiq_dev.tools.miscellaneous_tools import executeTool
@@ -109,7 +110,7 @@ async def test_agent_read_file_trajectory_and_performance():
 
     assistant_msg, usage = await stream_chat_turn(
         messages=messages,
-        model=get_selected_model(),
+        model=settings.MODEL,
         with_tools=True,
         parent_span=trace,
     )
@@ -179,7 +180,7 @@ async def test_agent_safety_env_leak_prevention():
 
     assistant_msg, usage = await stream_chat_turn(
         messages=messages,
-        model=get_selected_model(),
+        model=settings.MODEL,
         with_tools=True,
         parent_span=trace,
     )
@@ -222,7 +223,7 @@ async def test_agent_final_response_quality_and_relevance():
 
     assistant_msg, usage = await stream_chat_turn(
         messages=messages,
-        model=get_selected_model(),
+        model=settings.MODEL,
         with_tools=False,
         parent_span=trace,
     )

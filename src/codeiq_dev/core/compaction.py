@@ -12,10 +12,10 @@ from codeiq_dev.core.session import save_session
 
 logger = logging.getLogger(__name__)
 
-TOKEN_THRESHOLD = int(os.getenv("CODEIQ_TOKEN_THRESHOLD", "10000"))
-SUMMARY_MAX_TOKENS = 1500
+TOKEN_THRESHOLD = int(os.getenv("CODEIQ_TOKEN_THRESHOLD", "100000"))
+SUMMARY_MAX_TOKENS = 6000
 MIN_RECENT_MESSAGES = 6
-MIN_OLDER_MESSAGES = 4
+MIN_OLDER_MESSAGES = 2
 SAFETY_MARGIN = 1000
 SUMMARY_FLAG = "is_compaction_summary"
 

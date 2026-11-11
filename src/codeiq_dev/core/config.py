@@ -2,12 +2,19 @@ import json
 from pathlib import Path
 from typing import Any, Dict
 
-CONFIG_FILE = Path(".codeiq_config.json")
+# The configuration file path is now user-specific based on the requirement.
+# Target: C:\Users\<username>\.codeiq\models\.codeiq_config.json
+CONFIG_DIR = Path.home() / ".codeiq" / "models"
+CONFIG_FILE = CONFIG_DIR / ".codeiq_config.json"
 DEFAULT_PROVIDER = "gemini"
+
+def _ensure_config_dir() -> None:
+    """Ensure the target configuration directory exists."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
 
 def load_config() -> Dict[str, Any]:
     """
-    Load configuration directly from .codeiq_config.json.
+    Load configuration from the user-specific .codeiq_config.json.
 
     Args:
         None
@@ -27,7 +34,7 @@ def load_config() -> Dict[str, Any]:
 
 def save_config(data: Dict[str, Any]) -> None:
     """
-    Save configuration dictionary to .codeiq_config.json.
+    Save configuration dictionary to the user-specific .codeiq_config.json.
 
     Args:
         data (Dict[str, Any]): Configuration dictionary to persist.
@@ -35,6 +42,7 @@ def save_config(data: Dict[str, Any]) -> None:
     Returns:
         None
     """
+    _ensure_config_dir()
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)

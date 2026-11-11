@@ -9,14 +9,15 @@ import tiktoken
 from codeiq_dev.core.llm import _create_chat_completion_with_retry
 from codeiq_dev.core.settings import settings
 from codeiq_dev.core.session import save_session
+from codeiq_dev.tools.registry import tool_schema
 
 logger = logging.getLogger(__name__)
 
 TOKEN_THRESHOLD = int(os.getenv("CODEIQ_TOKEN_THRESHOLD", "100000"))
-SUMMARY_MAX_TOKENS = 6000
+SUMMARY_MAX_TOKENS = int(os.getenv("CODEIQ_SUMMARY_MAX_TOKENS", "6000"))
 MIN_RECENT_MESSAGES = 6
 MIN_OLDER_MESSAGES = 2
-SAFETY_MARGIN = 1000
+SAFETY_MARGIN = int(os.getenv("CODEIQ_SAFETY_MARGIN", "5000"))
 SUMMARY_FLAG = "is_compaction_summary"
 
 _ENC = tiktoken.get_encoding("cl100k_base")
@@ -35,6 +36,32 @@ def count_text_tokens(text: str) -> int:
     if not text:
         return 0
     return len(_ENC.encode(text, disallowed_special=()))
+
+
+def count_system_prompt_tokens(system_prompt: Optional[str]) -> int:
+    """Count tokens for the system prompt including overhead."""
+    if not system_prompt:
+        return 0
+    return 4 + count_text_tokens(system_prompt)
+
+
+def count_tool_schemas_tokens(schemas: Optional[List[Dict[str, Any]]] = None) -> int:
+    """Count tokens for tool definitions and function calling schemas."""
+    target_schemas = schemas if schemas is not None else tool_schema
+    if not target_schemas:
+        return 0
+    try:
+        return count_text_tokens(json.dumps(target_schemas, ensure_ascii=False))
+    except Exception:
+        return 0
+
+
+def calculate_static_overhead(
+    system_prompt: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+) -> int:
+    """Calculate combined static overhead for system prompt and tool schemas."""
+    return count_system_prompt_tokens(system_prompt) + count_tool_schemas_tokens(tools)
 
 
 def _message_payload(message: Dict[str, Any]) -> str:
@@ -223,16 +250,21 @@ async def generate_context_summary(
 async def maybe_compact_session(
     session: Dict[str, Any],
     current_context_tokens: Optional[int] = None,
+    system_prompt: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
 ) -> bool:
     """
     Compact a session when its active context exceeds the token threshold.
 
     Older messages are summarized, the most recent messages are preserved, and
     the session's message list is replaced with the summary plus recent turns.
+    Accounts for system prompt and tool schema static overhead in context budgeting.
 
     Args:
         session (Dict[str, Any]): Session data to inspect and potentially compact.
         current_context_tokens (Optional[int]): Measured request context size.
+        system_prompt (Optional[str]): Current system prompt text.
+        tools (Optional[List[Dict[str, Any]]]): Tool schemas sent to LLM.
 
     Returns:
         bool: True if the session was compacted, otherwise False.
@@ -241,14 +273,14 @@ async def maybe_compact_session(
     summary_messages = [message for message in messages if is_summary_message(message)]
     normal_messages = [message for message in messages if not is_summary_message(message)]
 
-    measured = current_context_tokens or count_messages_tokens(messages)
+    message_tokens = count_messages_tokens(messages)
+    static_overhead = calculate_static_overhead(system_prompt=system_prompt, tools=tools)
+    measured = current_context_tokens if current_context_tokens is not None else (static_overhead + message_tokens)
     session.setdefault("compaction", {})["context_tokens"] = measured
 
     if measured <= TOKEN_THRESHOLD:
         return False
 
-    message_tokens = count_messages_tokens(messages)
-    static_overhead = max(0, measured - message_tokens)
     budget_after = TOKEN_THRESHOLD - static_overhead - SUMMARY_MAX_TOKENS - SAFETY_MARGIN
     keep_recent_tokens = max(2000, budget_after)
 

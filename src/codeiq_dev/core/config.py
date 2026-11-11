@@ -10,7 +10,10 @@ DEFAULT_PROVIDER = "gemini"
 
 def _ensure_config_dir() -> None:
     """Ensure the target configuration directory exists."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
 
 def load_config() -> Dict[str, Any]:
     """
@@ -22,14 +25,14 @@ def load_config() -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Parsed configuration dictionary or default configuration structure.
     """
-    if CONFIG_FILE.exists():
-        try:
+    try:
+        if CONFIG_FILE.exists():
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data
-        except Exception:
-            pass
+    except Exception:
+        pass
     return {"providers": {DEFAULT_PROVIDER: {"models": [], "default": None}}}
 
 def save_config(data: Dict[str, Any]) -> None:

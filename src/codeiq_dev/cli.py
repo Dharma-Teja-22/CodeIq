@@ -234,6 +234,17 @@ async def _chat(session_id: Optional[str] = None):
             # Resumed/existing session: append and save directly
             append_message(session, user_message)
         
+        # Check compaction on new input user message before LLM inference
+        try:
+            compacted = await maybe_compact_session(session, current_context_tokens=None)
+            if compacted:
+                messages = [
+                    {"role": "system", "content": system_prompt}
+                ] + [m for m in session.get("messages", []) if m.get("role") != "system"]
+                console.print("[dim]⚡ Conversation context compacted below token threshold.[/dim]")
+        except Exception:
+            pass
+        
         # If session has default/initial title, generate AI title and rename file to <projectName>-<title>
         # if session.get("title") in ("New Session", "Untitled Session", None):
 
@@ -314,9 +325,10 @@ async def _chat(session_id: Optional[str] = None):
                     )
 
                     try:
+                        # Measure total tokens (input messages + assistant output + tool calls)
                         compacted = await maybe_compact_session(
                             session,
-                            current_context_tokens=query_tokens or None,
+                            current_context_tokens=None,
                         )
                         if compacted:
                             messages = [
@@ -512,6 +524,17 @@ async def _chat(session_id: Optional[str] = None):
                     tool_resp = {"role": "tool", "tool_call_id": tool_call.id, "content": str(result)}
                     messages.append(tool_resp)
                     append_message(session, tool_resp)
+
+                    # Check compaction after tool execution results are appended
+                    try:
+                        compacted = await maybe_compact_session(session, current_context_tokens=None)
+                        if compacted:
+                            messages = [
+                                {"role": "system", "content": system_prompt}
+                            ] + [m for m in session.get("messages", []) if m.get("role") != "system"]
+                            console.print("[dim]⚡ Conversation context compacted below token threshold.[/dim]")
+                    except Exception:
+                        pass
 
                     if cancelled:
                         break

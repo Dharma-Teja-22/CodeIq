@@ -40,6 +40,8 @@ def count_text_tokens(text: str) -> int:
 def _message_payload(message: Dict[str, Any]) -> str:
     """
     Build the full text payload of a message for token accounting.
+    Accounts for user/system/assistant content, tool calls, tool responses,
+    names, and arguments across input, output, and tool executions.
 
     Args:
         message (Dict[str, Any]): A conversation message.
@@ -47,9 +49,24 @@ def _message_payload(message: Dict[str, Any]) -> str:
     Returns:
         str: Concatenated content, tool calls, and tool identifiers.
     """
-    parts = [str(message.get("content") or "")]
-    if message.get("tool_calls"):
-        parts.append(json.dumps(message["tool_calls"], ensure_ascii=False))
+    parts = []
+    content = message.get("content")
+    if content:
+        parts.append(str(content))
+    tool_calls = message.get("tool_calls")
+    if tool_calls:
+        if isinstance(tool_calls, list):
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    fn = tc.get("function") or {}
+                    parts.append(f"{tc.get('id', '')} {fn.get('name', '')} {fn.get('arguments', '')}")
+                else:
+                    fn = getattr(tc, "function", None)
+                    fn_name = getattr(fn, "name", "") if fn else ""
+                    fn_args = getattr(fn, "arguments", "") if fn else ""
+                    tc_id = getattr(tc, "id", "")
+                    parts.append(f"{tc_id} {fn_name} {fn_args}")
+        parts.append(json.dumps(tool_calls, default=str, ensure_ascii=False))
     if message.get("tool_call_id"):
         parts.append(str(message["tool_call_id"]))
     if message.get("name"):
@@ -171,9 +188,12 @@ async def generate_context_summary(
     system_prompt = (
         "You compress conversation history for a coding assistant. "
         "Produce a dense, factual summary that preserves continuity. "
-        "You must preserve: user goals and constraints; decisions and rationale; "
-        "files, paths, commands, tools and their outcomes; errors and fixes; "
-        "open tasks and next steps; exact identifiers, names, versions and values. "
+        "You must preserve: user requests and inputs (user intent, instructions, goals, constraints); "
+        "assistant responses and outputs (explanations, proposed solutions, code, decisions, and rationale); "
+        "tool calls (tool names, functions, arguments, files/paths accessed or modified, git operations, shell commands executed); "
+        "tool execution outputs (command results, file contents/diffs, error messages, fixes, web search findings); "
+        "open tasks, unresolved bugs, and next steps; "
+        "exact identifiers, names, versions, and values. "
         "Do not invent facts. Do not include secrets or .env contents. "
         "Use short markdown bullets."
     )

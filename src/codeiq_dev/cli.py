@@ -1,5 +1,4 @@
 from datetime import datetime
-from asyncio import trsock
 from codeiq_dev.utils import repoMap
 from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
@@ -16,7 +15,7 @@ from rich.text import Text
 from rich.markdown import Markdown
 from rich.live import Live
 import json
-from codeiq_dev.tools.registry import tools
+from codeiq_dev.tools.registry import tools, tool_schema
 import msvcrt
 
 # Ensure standard output uses UTF-8 on Windows
@@ -33,7 +32,7 @@ console = Console()
 from typing import Optional
 
 from codeiq_dev.core.settings import *
-from codeiq_dev.core.config import load_config, save_config, DEFAULT_PROVIDER
+from codeiq_dev.core.config import load_config, save_config
 from codeiq_dev.core.llm import (
     close_client,
     create_chat_stream,
@@ -151,6 +150,14 @@ async def _chat(session_id: Optional[str] = None):
         console.print(f"[dim]Session: {session['session_id']} | Path: {session_file_path}[/dim]")
     
     repo_structure = repoMap.get_all_paths()
+    file_repo_url = str(Path.cwd())
+
+    # Build repo context including repository URL and directory structure
+    repo_context_parts = [f"Project Structure: {repo_structure}"]
+    if file_repo_url:
+        repo_context_parts.append(f"Repository URL: {file_repo_url}")
+    repo_context_str = " | ".join(repo_context_parts)
+
     system_prompt = (
         "You are CodeIq, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
         "For File Operations and Error Fixing: When the user asks you to run a file and fix/resolve its errors (e.g. 'run test.py file and resolve the issues'): "
@@ -164,7 +171,7 @@ async def _chat(session_id: Optional[str] = None):
         "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
         "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
         "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
-        f"Here is the project structure: {repo_structure}, if there is any folder which might be related to the request, please explore it and provide the response."
+        f"Here is the project structure and repository info: {repo_context_str}, if there is any folder which might be related to the request, please explore it and provide the response."
         "For Web Research and URL Content Extraction:"
         "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
         "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
@@ -236,7 +243,13 @@ async def _chat(session_id: Optional[str] = None):
         
         # Check compaction on new input user message before LLM inference
         try:
-            compacted = await maybe_compact_session(session, current_context_tokens=None)
+            compacted = await maybe_compact_session(
+                session,
+                current_context_tokens=None,
+                system_prompt=system_prompt,
+                tools=tool_schema,
+                file_repo_url=file_repo_url,
+            )
             if compacted:
                 messages = [
                     {"role": "system", "content": system_prompt}
@@ -329,6 +342,9 @@ async def _chat(session_id: Optional[str] = None):
                         compacted = await maybe_compact_session(
                             session,
                             current_context_tokens=None,
+                            system_prompt=system_prompt,
+                            tools=tool_schema,
+                            file_repo_url=file_repo_url,
                         )
                         if compacted:
                             messages = [

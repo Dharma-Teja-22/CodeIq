@@ -1,10 +1,9 @@
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-
-import tiktoken
 
 from codeiq_dev.core.llm import _create_chat_completion_with_retry
 from codeiq_dev.core.settings import settings
@@ -15,31 +14,33 @@ logger = logging.getLogger(__name__)
 
 TOKEN_THRESHOLD = int(os.getenv("CODEIQ_TOKEN_THRESHOLD", "100000"))
 SUMMARY_MAX_TOKENS = int(os.getenv("CODEIQ_SUMMARY_MAX_TOKENS", "6000"))
-MIN_RECENT_MESSAGES = 6
-MIN_OLDER_MESSAGES = 2
 SAFETY_MARGIN = int(os.getenv("CODEIQ_SAFETY_MARGIN", "5000"))
 SUMMARY_FLAG = "is_compaction_summary"
-
-_ENC = tiktoken.get_encoding("cl100k_base")
 
 
 def count_text_tokens(text: str) -> int:
     """
-    Count tokens in a plain text string using tiktoken.
+    Count tokens in a plain text string using character/word heuristic approximation.
+    Does not use tiktoken.
+    Standard approximation: ~4 characters per token for English text/code.
 
     Args:
         text (str): Text to measure.
 
     Returns:
-        int: Number of tokens in the text.
+        int: Estimated number of tokens in the text.
     """
     if not text:
         return 0
-    return len(_ENC.encode(text, disallowed_special=()))
+    # Standard LLM token estimation heuristic: max of char-length // 4 or word count
+    # For mixed prose and code, len(text) / 4 is the widely accepted standard
+    char_estimate = (len(text) + 3) // 4
+    word_estimate = len(text.split())
+    return max(char_estimate, word_estimate)
 
 
 def count_system_prompt_tokens(system_prompt: Optional[str]) -> int:
-    """Count tokens for the system prompt including overhead."""
+    """Count tokens for the system prompt including role overhead."""
     if not system_prompt:
         return 0
     return 4 + count_text_tokens(system_prompt)
@@ -56,12 +57,24 @@ def count_tool_schemas_tokens(schemas: Optional[List[Dict[str, Any]]] = None) ->
         return 0
 
 
+def count_repo_url_tokens(file_repo_url: Optional[str]) -> int:
+    """Count tokens for the file repository URL context."""
+    if not file_repo_url:
+        return 0
+    return count_text_tokens(str(file_repo_url))
+
+
 def calculate_static_overhead(
     system_prompt: Optional[str] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    file_repo_url: Optional[str] = None,
 ) -> int:
-    """Calculate combined static overhead for system prompt and tool schemas."""
-    return count_system_prompt_tokens(system_prompt) + count_tool_schemas_tokens(tools)
+    """Calculate combined static overhead: system prompt + tool schemas + file repo URL."""
+    return (
+        count_system_prompt_tokens(system_prompt)
+        + count_tool_schemas_tokens(tools)
+        + count_repo_url_tokens(file_repo_url)
+    )
 
 
 def _message_payload(message: Dict[str, Any]) -> str:
@@ -140,42 +153,12 @@ def is_summary_message(message: Dict[str, Any]) -> bool:
     return bool((message.get("metadata") or {}).get(SUMMARY_FLAG))
 
 
-def find_split_index(messages: List[Dict[str, Any]], keep_recent_tokens: int) -> int:
-    """
-    Find a safe boundary that keeps the newest messages within a token budget.
-
-    The boundary never leaves an orphan tool result without its assistant
-    tool-call message.
-
-    Args:
-        messages (List[Dict[str, Any]]): Non-summary conversation messages.
-        keep_recent_tokens (int): Token budget for the recent messages.
-
-    Returns:
-        int: Index of the first recent message.
-    """
-    total = 0
-    idx = len(messages)
-    for i in range(len(messages) - 1, -1, -1):
-        message_tokens = count_message_tokens(messages[i])
-        kept = len(messages) - i
-        if total + message_tokens > keep_recent_tokens and kept >= MIN_RECENT_MESSAGES:
-            break
-        total += message_tokens
-        idx = i
-
-    while idx > 0 and messages[idx].get("role") == "tool":
-        idx -= 1
-
-    return idx
-
-
 def render_for_summary(messages: List[Dict[str, Any]], max_chars_per_message: int = 6000) -> str:
     """
     Render messages as a compact transcript for summarization.
 
     Args:
-        messages (List[Dict[str, Any]]): Older messages to summarize.
+        messages (List[Dict[str, Any]]): Messages to summarize.
         max_chars_per_message (int): Maximum characters retained per message.
 
     Returns:
@@ -197,21 +180,21 @@ def render_for_summary(messages: List[Dict[str, Any]], max_chars_per_message: in
 
 async def generate_context_summary(
     existing_summary: str,
-    older_messages: List[Dict[str, Any]],
+    messages_to_summarize: List[Dict[str, Any]],
     model: Optional[str] = None,
 ) -> str:
     """
-    Generate a concise summary of older conversation turns.
+    Generate a concise summary of conversation turns using LLM.
 
     Args:
         existing_summary (str): Prior compaction summary to carry forward.
-        older_messages (List[Dict[str, Any]]): Older turns to fold into the summary.
+        messages_to_summarize (List[Dict[str, Any]]): Messages to fold into the summary.
         model (Optional[str]): Model override for summarization.
 
     Returns:
-        str: Updated conversation summary.
+        str: Compacted conversation summary.
     """
-    transcript = render_for_summary(older_messages)
+    transcript = render_for_summary(messages_to_summarize)
     system_prompt = (
         "You compress conversation history for a coding assistant. "
         "Produce a dense, factual summary that preserves continuity. "
@@ -227,7 +210,7 @@ async def generate_context_summary(
     user_prompt = (
         f"Existing summary to carry forward and merge:\n"
         f"{existing_summary or '(none)'}\n\n"
-        f"Older conversation turns to fold into the summary:\n"
+        f"Conversation history to fold into the summary:\n"
         f"{transcript}\n\n"
         f"Return only the updated summary, no preamble, maximum "
         f"{SUMMARY_MAX_TOKENS} tokens.\n"
@@ -252,62 +235,79 @@ async def maybe_compact_session(
     current_context_tokens: Optional[int] = None,
     system_prompt: Optional[str] = None,
     tools: Optional[List[Dict[str, Any]]] = None,
+    file_repo_url: Optional[str] = None,
 ) -> bool:
     """
-    Compact a session when its active context exceeds the token threshold.
+    Compact a session when its total context/tokens reaches the token threshold.
 
-    Older messages are summarized, the most recent messages are preserved, and
-    the session's message list is replaced with the summary plus recent turns.
-    Accounts for system prompt and tool schema static overhead in context budgeting.
+    When triggered:
+    1. Generates an LLM summary of the entire conversation history up to that point.
+    2. Replaces the existing conversation context in systemPromptTokens with the newly
+       generated compacted summary, while retaining toolSchema and fileRepoUrl:
+       systemPromptTokens = newCompactedSummaryTokens + toolSchemaTokens + fileRepoUrlTokens
+    3. Replaces previous messages with the compacted summary message.
+    4. Automatically recalculates and updates all dependent token counts, including total_tokens.
+    5. Strips out the 'compaction' key from the session dict.
 
     Args:
-        session (Dict[str, Any]): Session data to inspect and potentially compact.
-        current_context_tokens (Optional[int]): Measured request context size.
-        system_prompt (Optional[str]): Current system prompt text.
-        tools (Optional[List[Dict[str, Any]]]): Tool schemas sent to LLM.
+        session (Dict[str, Any]): Session data to inspect and compact.
+        current_context_tokens (Optional[int]): Current context tokens if known.
+        system_prompt (Optional[str]): System prompt content.
+        tools (Optional[List[Dict[str, Any]]]): Tool definitions.
+        file_repo_url (Optional[str]): Git/File repository URL.
 
     Returns:
-        bool: True if the session was compacted, otherwise False.
+        bool: True if compaction occurred, False otherwise.
     """
+    # Remove compact/compaction key from session if present
+    if "compaction" in session:
+        session.pop("compaction", None)
+
+    # Compute static component token counts
+    tool_schema_tokens = count_tool_schemas_tokens(tools)
+    file_repo_tokens = count_repo_url_tokens(file_repo_url)
+
     messages: List[Dict[str, Any]] = session.get("messages", [])
-    summary_messages = [message for message in messages if is_summary_message(message)]
-    normal_messages = [message for message in messages if not is_summary_message(message)]
-
     message_tokens = count_messages_tokens(messages)
-    static_overhead = calculate_static_overhead(system_prompt=system_prompt, tools=tools)
-    measured = current_context_tokens if current_context_tokens is not None else (static_overhead + message_tokens)
-    session.setdefault("compaction", {})["context_tokens"] = measured
 
-    if measured <= TOKEN_THRESHOLD:
+    # If systemPromptTokens is not already initialized, initialize it with
+    # systemPrompt + toolSchema + fileRepoUrl
+    base_sys_prompt_tokens = count_system_prompt_tokens(system_prompt)
+    if not session.get("systemPromptTokens"):
+        session["systemPromptTokens"] = base_sys_prompt_tokens + tool_schema_tokens + file_repo_tokens
+
+    session["toolSchemaTokens"] = tool_schema_tokens
+    session["fileRepoUrlTokens"] = file_repo_tokens
+
+    # Current measured total tokens across context: systemPromptTokens + message tokens
+    # Or session's recorded total_tokens
+    session_total = session.get("total_tokens", 0)
+    current_total = max(session_total, session["systemPromptTokens"] + message_tokens)
+    if current_context_tokens is not None:
+        current_total = max(current_total, current_context_tokens)
+
+    # Check whether token threshold has been reached
+    if current_total < TOKEN_THRESHOLD:
         return False
 
-    budget_after = TOKEN_THRESHOLD - static_overhead - SUMMARY_MAX_TOKENS - SAFETY_MARGIN
-    keep_recent_tokens = max(2000, budget_after)
+    # Extract any existing summary and normal conversation messages
+    summary_messages = [m for m in messages if is_summary_message(m)]
+    normal_messages = [m for m in messages if not is_summary_message(m)]
 
-    split = find_split_index(normal_messages, keep_recent_tokens)
-    if len(normal_messages) - split < MIN_OLDER_MESSAGES:
-        desired_split = min(
-            MIN_OLDER_MESSAGES,
-            len(normal_messages) - MIN_RECENT_MESSAGES,
-        )
-        if desired_split > split:
-            split = desired_split
-
-    older = normal_messages[:split]
-    recent = normal_messages[split:]
-
-    if not older:
-        logger.warning("Compaction skipped: no older messages to summarize.")
+    if not normal_messages and not summary_messages:
         return False
 
     existing_summary = ""
     if summary_messages:
         existing_summary = "\n\n".join(
-            str(message.get("content") or "") for message in summary_messages
+            str(m.get("content") or "") for m in summary_messages
         )
 
     try:
-        summary_text = await generate_context_summary(existing_summary, older)
+        summary_text = await generate_context_summary(
+            existing_summary,
+            normal_messages if normal_messages else summary_messages,
+        )
     except Exception as exc:
         logger.warning("Compaction failed; history unchanged: %s", exc)
         return False
@@ -315,57 +315,38 @@ async def maybe_compact_session(
     if not summary_text:
         return False
 
-    previous = session.get("compaction", {})
+    # Create new compacted summary message
     summary_message = {
         "role": "system",
         "content": f"Conversation summary so far:\n{summary_text}",
         "metadata": {
             SUMMARY_FLAG: True,
-            "summary_version": int(previous.get("compaction_count", 0)) + 1,
-            "covered_messages": len(older),
             "created_at": datetime.now().isoformat(),
         },
     }
 
-    new_messages = [summary_message] + recent
-    new_total = static_overhead + count_messages_tokens(new_messages)
+    # Replace previous conversation history with the compacted summary
+    session["messages"] = [summary_message]
 
-    attempts = 0
-    while new_total > TOKEN_THRESHOLD and attempts < 3 and len(recent) > MIN_RECENT_MESSAGES:
-        attempts += 1
-        extra_count = max(1, len(recent) // 4)
-        extra_messages = recent[:extra_count]
-        older.extend(extra_messages)
-        recent = recent[extra_count:]
-        try:
-            summary_text = await generate_context_summary(summary_text, extra_messages)
-        except Exception:
-            break
-        summary_message["content"] = f"Conversation summary so far:\n{summary_text}"
-        new_messages = [summary_message] + recent
-        new_total = static_overhead + count_messages_tokens(new_messages)
+    # Calculate tokens for the newly generated compacted summary
+    new_compacted_summary_tokens = count_message_tokens(summary_message)
 
-    while new_total > TOKEN_THRESHOLD and len(recent) > 1:
-        recent = recent[1:]
-        while recent and recent[0].get("role") == "tool":
-            recent = recent[1:]
-        new_messages = [summary_message] + recent
-        new_total = static_overhead + count_messages_tokens(new_messages)
+    # Update systemPromptTokens:
+    # systemPromptTokens = newCompactedSummaryTokens + toolSchemaTokens + fileRepoUrlTokens
+    session["systemPromptTokens"] = new_compacted_summary_tokens + tool_schema_tokens + file_repo_tokens
 
-    if new_total > TOKEN_THRESHOLD:
-        logger.warning("Compaction could not bring context below threshold: %s tokens", new_total)
+    # Dependent token count recalculation:
+    # Recalculate prompt tokens and total_tokens based on updated compacted context
+    recalculated_prompt_tokens = session["systemPromptTokens"]
+    completion_tokens = session.get("session_completion_tokens", 0)
+    recalculated_total_tokens = recalculated_prompt_tokens + completion_tokens
 
-    session["messages"] = new_messages
-    session["compaction"] = {
-        "summary": summary_text,
-        "summary_tokens": count_text_tokens(summary_text),
-        "context_tokens": count_messages_tokens(new_messages),
-        "compaction_count": int(previous.get("compaction_count", 0)) + 1,
-        "compacted_message_count": int(previous.get("compacted_message_count", 0)) + len(older),
-        "last_compacted_at": datetime.now().isoformat(),
-        "threshold": TOKEN_THRESHOLD,
-    }
+    session["session_prompt_tokens"] = recalculated_prompt_tokens
+    session["total_tokens"] = recalculated_total_tokens
+
+    # Explicitly ensure compaction key is removed
+    session.pop("compaction", None)
+
     session["updated_at"] = datetime.now().isoformat()
     save_session(session)
     return True
-

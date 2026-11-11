@@ -73,6 +73,9 @@ def create_session(model: Optional[str] = None, save: bool = True) -> Dict[str, 
         "title": "New Session",
         "model_name": model or "unknown",
         "messages": [],
+        "systemPromptTokens": 0,
+        "toolSchemaTokens": 0,
+        "fileRepoUrlTokens": 0,
         "session_prompt_tokens": 0,
         "session_completion_tokens": 0,
         "session_requests": 0,
@@ -114,6 +117,14 @@ def load_session(session_id: str) -> Dict[str, Any]:
                     data["session_prompt_tokens"] = t_info.get("query_tokens", 0)
                     data["session_completion_tokens"] = t_info.get("completion_tokens", 0)
                     data["total_tokens"] = t_info.get("session_tokens", 0)
+                if "systemPromptTokens" not in data:
+                    data["systemPromptTokens"] = 0
+                if "toolSchemaTokens" not in data:
+                    data["toolSchemaTokens"] = 0
+                if "fileRepoUrlTokens" not in data:
+                    data["fileRepoUrlTokens"] = 0
+                if "compaction" in data:
+                    data.pop("compaction", None)
                 if "model_name" not in data:
                     data["model_name"] = data.get("model", "unknown")
                 if "project_name" not in data:
@@ -138,6 +149,9 @@ def save_session(session_data: Dict[str, Any]) -> None:
         None
     """
     _ensure_sessions_dir()
+    # Remove compact key from session if present
+    if "compaction" in session_data:
+        session_data.pop("compaction", None)
     session_id = session_data.get("session_id", "session_unknown")
     file_path = get_session_file_path(session_id)
     try:

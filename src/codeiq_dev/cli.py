@@ -41,6 +41,7 @@ from codeiq_dev.core.llm import (
     stream_chat_turn,
 )
 from codeiq_dev.core.compaction import maybe_compact_session
+from codeiq_dev.core.cost_metrics import record_cost_metric, load_cost_metrics, METRICS_FILE
 from codeiq_dev.core.session import (
     SESSIONS_DIR,
     append_message,
@@ -336,6 +337,17 @@ async def _chat(session_id: Optional[str] = None):
                         total_tokens=accum_total,
                         increment_requests=True,
                     )
+
+                    # Record model usage and cost metrics
+                    try:
+                        record_cost_metric(
+                            model_name=current_model,
+                            prompt_tokens=query_tokens,
+                            completion_tokens=completion_tokens,
+                            session_id=session.get("session_id"),
+                        )
+                    except Exception:
+                        pass
 
                     try:
                         # Measure total tokens (input messages + assistant output + tool calls)

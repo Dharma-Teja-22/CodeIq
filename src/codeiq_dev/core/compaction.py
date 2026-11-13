@@ -9,6 +9,7 @@ from codeiq_dev.core.llm import _create_chat_completion_with_retry
 from codeiq_dev.core.settings import settings
 from codeiq_dev.core.session import save_session
 from codeiq_dev.tools.registry import tool_schema
+from codeiq_dev.core.cost_metrics import record_cost_metric
 
 logger = logging.getLogger(__name__)
 
@@ -216,9 +217,10 @@ async def generate_context_summary(
         f"{SUMMARY_MAX_TOKENS} tokens.\n"
     )
 
+    model_to_use = model or settings.SMALL_MODEL or settings.MODEL
     response = await _create_chat_completion_with_retry(
         {
-            "model": model or settings.SMALL_MODEL or settings.MODEL,
+            "model": model_to_use,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
@@ -227,6 +229,16 @@ async def generate_context_summary(
             "max_tokens": SUMMARY_MAX_TOKENS,
         }
     )
+    if getattr(response, "usage", None):
+        try:
+            record_cost_metric(
+                model_name=model_to_use,
+                prompt_tokens=response.usage.prompt_tokens or 0,
+                completion_tokens=response.usage.completion_tokens or 0,
+                call_type="compaction_summary",
+            )
+        except Exception:
+            pass
     return (response.choices[0].message.content or "").strip()
 
 

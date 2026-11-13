@@ -9,3 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Local metrics files (stored in ~/.codeiq/metrics/)
+usage_data.js
+cost_metrics.json
+dashboard_cost_metrics.html

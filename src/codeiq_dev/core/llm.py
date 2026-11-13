@@ -12,6 +12,7 @@ from tenacity import (
 )
 from codeiq_dev.core.settings import settings
 from codeiq_dev.tools.registry import tool_schema as tools
+from codeiq_dev.core.cost_metrics import record_cost_metric
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,16 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                 {"role": "user", "content": prompt},
             ],
         })
+        if getattr(response, "usage", None):
+            try:
+                record_cost_metric(
+                    model_name=model_name,
+                    prompt_tokens=response.usage.prompt_tokens or 0,
+                    completion_tokens=response.usage.completion_tokens or 0,
+                    call_type="commit_generation",
+                )
+            except Exception:
+                pass
         return (response.choices[0].message.content or "").strip().strip('"').strip("'")
     except Exception as e:
         return f"Error generating commit message: {str(e)}"
@@ -296,6 +307,16 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
                 {"role": "user", "content": cleaned_prompt},
             ],
         })
+        if getattr(response, "usage", None):
+            try:
+                record_cost_metric(
+                    model_name=model_name,
+                    prompt_tokens=response.usage.prompt_tokens or 0,
+                    completion_tokens=response.usage.completion_tokens or 0,
+                    call_type="title_generation",
+                )
+            except Exception:
+                pass
         title = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip("`")
         # Sanitize for safe filenames (remove illegal characters: \ / : * ? " < > |)
         sanitized = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()

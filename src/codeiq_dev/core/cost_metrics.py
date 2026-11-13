@@ -27,21 +27,14 @@ MODEL_RATES = {
 
 
 def _get_metrics_file() -> Path:
-    """Return an accessible path for storing cost metrics."""
-    # First try user home directory: ~/.codeiq/metrics/cost_metrics.json
+    """Return an accessible path for storing cost metrics in ~/.codeiq/metrics."""
+    target_dir = Path.home() / ".codeiq" / "metrics"
     try:
-        user_dir = Path.home() / ".codeiq" / "metrics"
-        user_dir.mkdir(parents=True, exist_ok=True)
-        # Test write permission
-        test_file = user_dir / ".test_write"
-        with open(test_file, "w") as f:
-            f.write("ok")
-        test_file.unlink()
-        return user_dir / "cost_metrics.json"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        return target_dir / "usage_data.js"
     except Exception:
-        pass
-    # Fallback to local project directory: ./cost_metrics.json
-    return Path.cwd() / "cost_metrics.json"
+        # Fallback to local project directory if home directory is not writable
+        return Path.cwd() / "usage_data.js"
 
 
 METRICS_FILE = _get_metrics_file()
@@ -75,10 +68,10 @@ def calculate_cost(model_name: str, prompt_tokens: int, completion_tokens: int) 
 
 def load_cost_metrics() -> Dict[str, Any]:
     """
-    Load the cost metrics JSON file.
+    Load metrics directly from usage_data.js.
 
     Returns:
-        Dict: JSON metrics dictionary containing daily aggregation and log records.
+        Dict: Metrics dictionary containing summary, daily_metrics, and logs.
     """
     global METRICS_FILE
     if not METRICS_FILE.parent.exists():
@@ -87,11 +80,39 @@ def load_cost_metrics() -> Dict[str, Any]:
     if METRICS_FILE.exists():
         try:
             with open(METRICS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
+                content = f.read()
+            # Extract JSON object from window.USAGE_DATA = { ... };
+            idx_start = content.find("{")
+            idx_end = content.rfind("}")
+            if idx_start != -1 and idx_end != -1:
+                usage_data = json.loads(content[idx_start : idx_end + 1])
+                summary = usage_data.get("_summary", {})
+                logs = usage_data.get("_logs", [])
+                updated_at = usage_data.get("_updated_at", datetime.now().isoformat())
+
+                # Reconstruct daily_metrics
+                daily_metrics: Dict[str, Any] = {}
+                for k, v in usage_data.items():
+                    if k.startswith("_") or not isinstance(v, dict):
+                        continue
+                    daily_metrics[k] = {}
+                    for model_name, stats in v.items():
+                        daily_metrics[k][model_name] = {
+                            "prompt_tokens": stats.get("prompt_tokens", 0),
+                            "completion_tokens": stats.get("completion_tokens", 0),
+                            "total_tokens": stats.get("tokens", stats.get("total_tokens", 0)),
+                            "cost_usd": stats.get("cost", stats.get("cost_usd", 0.0)),
+                            "turns": stats.get("requests", stats.get("turns", 0)),
+                        }
+
+                return {
+                    "updated_at": updated_at,
+                    "summary": summary,
+                    "daily_metrics": daily_metrics,
+                    "logs": logs,
+                }
         except Exception as exc:
-            logger.debug("Failed to read metrics file: %s", exc)
+            logger.debug("Failed to read usage_data.js: %s", exc)
 
     return {
         "updated_at": datetime.now().isoformat(),
@@ -112,16 +133,19 @@ def record_cost_metric(
     prompt_tokens: int,
     completion_tokens: int,
     session_id: Optional[str] = None,
+    call_type: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Record an LLM usage turn into the metrics store.
-    Tracks model, date, prompt tokens, completion tokens, total tokens, and USD cost.
+    Tracks model, date, prompt tokens, completion tokens, total tokens, USD cost,
+    and optional call type (e.g. 'chat_turn', 'tool_turn', 'title_generation', 'commit_generation').
 
     Args:
         model_name: Identifier of the LLM model used.
         prompt_tokens: Prompt tokens for this turn.
         completion_tokens: Completion tokens for this turn.
         session_id: Session ID where the interaction occurred.
+        call_type: Optional label indicating the operation type.
 
     Returns:
         Dict: Updated turn record including calculated cost.
@@ -168,6 +192,7 @@ def record_cost_metric(
         "timestamp": now_iso,
         "date": today_str,
         "session_id": session_id or "",
+        "call_type": call_type or "chat_turn",
         "model": model_name,
         "prompt_tokens": prompt_tokens,
         "completion_tokens": completion_tokens,
@@ -181,17 +206,58 @@ def record_cost_metric(
 
     metrics["updated_at"] = now_iso
 
-    try:
-        with open(METRICS_FILE, "w", encoding="utf-8") as f:
-            json.dump(metrics, f, indent=2, ensure_ascii=False)
-    except Exception as exc:
-        # Fallback to local cwd
-        fallback_file = Path.cwd() / "cost_metrics.json"
-        try:
-            with open(fallback_file, "w", encoding="utf-8") as f:
-                json.dump(metrics, f, indent=2, ensure_ascii=False)
-            METRICS_FILE = fallback_file
-        except Exception:
-            logger.warning("Could not persist cost metrics: %s", exc)
+    # Persist directly into usage_data.js in ~/.codeiq/metrics
+    _export_usage_data_js(metrics)
 
     return record
+
+
+def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
+    """
+    Export metrics to usage_data.js strictly in the Path.home() / .codeiq / metrics
+    directory. Never write usage_data.js into the local workspace/repository.
+    """
+    try:
+        # Convert daily_metrics structure to match USAGE_DATA format:
+        # window.USAGE_DATA = {
+        #   "2026-09-25": {
+        #     "google/gemini-3.7-flash": {
+        #       "prompt_tokens": 536494,
+        #       "completion_tokens": 1387,
+        #       "tokens": 537881,
+        #       "requests": 7,
+        #       "cost": 0.407571
+        #     }
+        #   }
+        # }
+        daily = metrics.get("daily_metrics", {})
+        usage_data: Dict[str, Any] = {}
+        for d, models_dict in daily.items():
+            usage_data[d] = {}
+            for m, vals in models_dict.items():
+                usage_data[d][m] = {
+                    "prompt_tokens": vals.get("prompt_tokens", 0),
+                    "completion_tokens": vals.get("completion_tokens", 0),
+                    "tokens": vals.get("total_tokens", vals.get("prompt_tokens", 0) + vals.get("completion_tokens", 0)),
+                    "requests": vals.get("turns", 0),
+                    "cost": vals.get("cost_usd", 0.0),
+                }
+
+        # Include summary and logs metadata as extra properties on window.USAGE_DATA
+        usage_data["_summary"] = metrics.get("summary", {})
+        usage_data["_logs"] = metrics.get("logs", [])
+        usage_data["_updated_at"] = metrics.get("updated_at", "")
+
+        js_content = f"window.USAGE_DATA = {json.dumps(usage_data, indent=2, ensure_ascii=False)};\n"
+
+        # Strictly target ~/.codeiq/metrics directory
+        target_dir = Path.home() / ".codeiq" / "metrics"
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            metrics_js = target_dir / "usage_data.js"
+            with open(metrics_js, "w", encoding="utf-8") as f:
+                f.write(js_content)
+        except Exception as dir_err:
+            logger.debug("Could not write usage_data.js to %s: %s", target_dir, dir_err)
+    except Exception as exc:
+        logger.debug("Could not write usage_data.js: %s", exc)

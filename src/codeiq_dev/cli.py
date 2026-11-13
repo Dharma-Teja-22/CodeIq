@@ -264,6 +264,8 @@ async def _chat(session_id: Optional[str] = None):
 
         query_tokens = 0
         completion_tokens = 0
+        total_query_tokens_accum = 0
+        total_completion_tokens_accum = 0
         final_response = ""
         
         status_text = "Thinking..."
@@ -313,19 +315,38 @@ async def _chat(session_id: Optional[str] = None):
                     if usage_info["session_tokens"]:
                         session_tokens = usage_info["session_tokens"]
 
+                    # Accumulate tokens across all intermediate rounds
+                    round_query_tokens = usage_info.get("query_tokens", 0)
+                    round_completion_tokens = usage_info.get("completion_tokens", 0)
+                    total_query_tokens_accum += round_query_tokens
+                    total_completion_tokens_accum += round_completion_tokens
+
+                    # Record cost metrics for this specific LLM hit
+                    if round_query_tokens or round_completion_tokens:
+                        try:
+                            record_cost_metric(
+                                model_name=current_model,
+                                prompt_tokens=round_query_tokens,
+                                completion_tokens=round_completion_tokens,
+                                session_id=session.get("session_id"),
+                                call_type="final_response" if not requested_tool_calls else "tool_call",
+                            )
+                        except Exception:
+                            pass
+
                 if assistant_message.content:
                     console.print()
 
                 # No more tool calls: display tokens and end round.
                 if not requested_tool_calls:
-                    # Accumulate session tokens
-                    accum_prompt = session.get("session_prompt_tokens", 0) + query_tokens
-                    accum_comp = session.get("session_completion_tokens", 0) + completion_tokens
-                    accum_total = session.get("total_tokens", 0) + (query_tokens + completion_tokens)
+                    # Accumulate session tokens across all rounds of this user turn
+                    accum_prompt = session.get("session_prompt_tokens", 0) + total_query_tokens_accum
+                    accum_comp = session.get("session_completion_tokens", 0) + total_completion_tokens_accum
+                    accum_total = session.get("total_tokens", 0) + (total_query_tokens_accum + total_completion_tokens_accum)
 
                     if (not full_content.strip()) and status_text != "Thinking...":
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
-                    console.print(f"[dim]Turn Tokens: Query: {query_tokens} | Completion: {completion_tokens} | Session Total: {accum_total}[/dim]\n")
+                    console.print(f"[dim]Turn Tokens: Query: {total_query_tokens_accum} | Completion: {total_completion_tokens_accum} | Session Total: {accum_total}[/dim]\n")
                     # Save assistant message to session JSON
                     asst_dump = assistant_message.model_dump(exclude_none=True)
                     messages.append(asst_dump)
@@ -337,17 +358,6 @@ async def _chat(session_id: Optional[str] = None):
                         total_tokens=accum_total,
                         increment_requests=True,
                     )
-
-                    # Record model usage and cost metrics
-                    try:
-                        record_cost_metric(
-                            model_name=current_model,
-                            prompt_tokens=query_tokens,
-                            completion_tokens=completion_tokens,
-                            session_id=session.get("session_id"),
-                        )
-                    except Exception:
-                        pass
 
                     try:
                         # Measure total tokens (input messages + assistant output + tool calls)
@@ -764,6 +774,16 @@ async def _generate_response(prompt: str) -> None:
         console.print()
 
     console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens}[/dim]\n")
+
+    try:
+        record_cost_metric(
+            model_name=current_model,
+            prompt_tokens=p_tokens,
+            completion_tokens=c_tokens,
+            call_type="single_turn_generate",
+        )
+    except Exception:
+        pass
 
 # Generate response from AI model
 @app.command()

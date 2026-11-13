@@ -128,17 +128,30 @@ def load_cost_metrics() -> Dict[str, Any]:
     }
 
 
+def _percentile(values: List[float], pct: float) -> float:
+    """Calculate the percentile value from an unsorted or sorted list of floats."""
+    if not values:
+        return 0.0
+    sorted_vals = sorted(values)
+    k = (len(sorted_vals) - 1) * pct
+    f = int(k)
+    c = min(f + 1, len(sorted_vals) - 1)
+    return round(sorted_vals[f] + (k - f) * (sorted_vals[c] - sorted_vals[f]), 3)
+
+
 def record_cost_metric(
     model_name: str,
     prompt_tokens: int,
     completion_tokens: int,
     session_id: Optional[str] = None,
     call_type: Optional[str] = None,
+    ttft: Optional[float] = None,
+    total_latency: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Record an LLM usage turn into the metrics store.
     Tracks model, date, prompt tokens, completion tokens, total tokens, USD cost,
-    and optional call type (e.g. 'chat_turn', 'tool_turn', 'title_generation', 'commit_generation').
+    latency, TTFT, and optional call type.
 
     Args:
         model_name: Identifier of the LLM model used.
@@ -146,9 +159,11 @@ def record_cost_metric(
         completion_tokens: Completion tokens for this turn.
         session_id: Session ID where the interaction occurred.
         call_type: Optional label indicating the operation type.
+        ttft: Time to first token in seconds.
+        total_latency: Total request duration in seconds.
 
     Returns:
-        Dict: Updated turn record including calculated cost.
+        Dict: Updated turn record including calculated cost and latency.
     """
     global METRICS_FILE
     model_name = model_name or "unknown"
@@ -199,6 +214,11 @@ def record_cost_metric(
         "total_tokens": turn_total_tokens,
         "cost_usd": turn_cost,
     }
+    if ttft is not None:
+        record["ttft"] = round(ttft, 3)
+    if total_latency is not None:
+        record["total_latency"] = round(total_latency, 3)
+
     logs = metrics.setdefault("logs", [])
     logs.append(record)
     if len(logs) > 1000:
@@ -215,42 +235,48 @@ def record_cost_metric(
 def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
     """
     Export metrics to usage_data.js strictly in the Path.home() / .codeiq / metrics
-    directory. Never write usage_data.js into the local workspace/repository.
+    directory. Includes P50, P95, and TTFT telemetry calculations.
     """
     try:
-        # Convert daily_metrics structure to match USAGE_DATA format:
-        # window.USAGE_DATA = {
-        #   "2026-09-25": {
-        #     "google/gemini-3.7-flash": {
-        #       "prompt_tokens": 536494,
-        #       "completion_tokens": 1387,
-        #       "tokens": 537881,
-        #       "requests": 7,
-        #       "cost": 0.407571
-        #     }
-        #   }
-        # }
         daily = metrics.get("daily_metrics", {})
+        logs = metrics.get("logs", [])
+
+        # Overall latency and TTFT percentiles
+        all_lats = [l["total_latency"] for l in logs if "total_latency" in l]
+        all_ttfts = [l["ttft"] for l in logs if "ttft" in l]
+
+        summary = dict(metrics.get("summary", {}))
+        summary["p50_latency"] = _percentile(all_lats, 0.50)
+        summary["p95_latency"] = _percentile(all_lats, 0.95)
+        summary["avg_ttft"] = round(sum(all_ttfts) / len(all_ttfts), 3) if all_ttfts else 0.0
+        summary["p95_ttft"] = _percentile(all_ttfts, 0.95)
+
         usage_data: Dict[str, Any] = {}
         for d, models_dict in daily.items():
             usage_data[d] = {}
             for m, vals in models_dict.items():
+                m_logs = [l for l in logs if l.get("date") == d and l.get("model") == m]
+                m_lats = [l["total_latency"] for l in m_logs if "total_latency" in l]
+                m_ttfts = [l["ttft"] for l in m_logs if "ttft" in l]
+
                 usage_data[d][m] = {
                     "prompt_tokens": vals.get("prompt_tokens", 0),
                     "completion_tokens": vals.get("completion_tokens", 0),
                     "tokens": vals.get("total_tokens", vals.get("prompt_tokens", 0) + vals.get("completion_tokens", 0)),
                     "requests": vals.get("turns", 0),
                     "cost": vals.get("cost_usd", 0.0),
+                    "p50_latency": _percentile(m_lats, 0.50),
+                    "p95_latency": _percentile(m_lats, 0.95),
+                    "avg_ttft": round(sum(m_ttfts) / len(m_ttfts), 3) if m_ttfts else 0.0,
+                    "p95_ttft": _percentile(m_ttfts, 0.95),
                 }
 
-        # Include summary and logs metadata as extra properties on window.USAGE_DATA
-        usage_data["_summary"] = metrics.get("summary", {})
-        usage_data["_logs"] = metrics.get("logs", [])
+        usage_data["_summary"] = summary
+        usage_data["_logs"] = logs
         usage_data["_updated_at"] = metrics.get("updated_at", "")
 
         js_content = f"window.USAGE_DATA = {json.dumps(usage_data, indent=2, ensure_ascii=False)};\n"
 
-        # Strictly target ~/.codeiq/metrics directory
         target_dir = Path.home() / ".codeiq" / "metrics"
         try:
             target_dir.mkdir(parents=True, exist_ok=True)

@@ -321,7 +321,7 @@ async def _chat(session_id: Optional[str] = None):
                     total_query_tokens_accum += round_query_tokens
                     total_completion_tokens_accum += round_completion_tokens
 
-                    # Record cost metrics for this specific LLM hit
+                    # Record cost & latency metrics for this specific LLM hit
                     if round_query_tokens or round_completion_tokens:
                         try:
                             record_cost_metric(
@@ -330,6 +330,8 @@ async def _chat(session_id: Optional[str] = None):
                                 completion_tokens=round_completion_tokens,
                                 session_id=session.get("session_id"),
                                 call_type="final_response" if not requested_tool_calls else "tool_call",
+                                ttft=usage_info.get("ttft"),
+                                total_latency=usage_info.get("total_latency"),
                             )
                         except Exception:
                             pass

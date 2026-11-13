@@ -1,6 +1,7 @@
 from openai import AsyncOpenAI
 from typing import Dict, Any, List, Optional
 import logging
+import time
 # Tenacity : Exponential Backoff with built in Jitter 
 from tenacity import (
     retry,
@@ -171,12 +172,23 @@ async def stream_chat_turn(
         tuple[AssistantMessage, dict]: Assistant message instance and token usage summary dictionary.
     """
     try:
+        start_time = time.perf_counter()
+        first_token_time = None
         stream = await create_chat_stream(messages=messages, model=model, with_tools=with_tools)
         full_content = ""
         requested_tool_calls = []
-        usage_info = {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}
+        usage_info = {
+            "query_tokens": 0,
+            "completion_tokens": 0,
+            "session_tokens": 0,
+            "ttft": 0.0,
+            "total_latency": 0.0,
+        }
 
         async for chunk in stream:
+            if first_token_time is None:
+                first_token_time = time.perf_counter()
+
             if getattr(chunk, "usage", None) and chunk.usage:
                 q = chunk.usage.prompt_tokens or usage_info["query_tokens"]
                 c = chunk.usage.completion_tokens or usage_info["completion_tokens"]
@@ -198,6 +210,11 @@ async def stream_chat_turn(
                             if on_tool_call:
                                 for tc in delta.tool_calls:
                                     on_tool_call(tc)
+
+        end_time = time.perf_counter()
+        ttft_val = (first_token_time - start_time) if first_token_time else (end_time - start_time)
+        usage_info["ttft"] = round(ttft_val, 3)
+        usage_info["total_latency"] = round(end_time - start_time, 3)
 
         return AssistantMessage(full_content, requested_tool_calls), usage_info
 

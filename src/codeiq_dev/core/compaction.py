@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -218,6 +219,7 @@ async def generate_context_summary(
     )
 
     model_to_use = model or settings.SMALL_MODEL or settings.MODEL
+    t_start = time.perf_counter()
     response = await _create_chat_completion_with_retry(
         {
             "model": model_to_use,
@@ -229,6 +231,8 @@ async def generate_context_summary(
             "max_tokens": SUMMARY_MAX_TOKENS,
         }
     )
+    t_latency = round(time.perf_counter() - t_start, 3)
+
     if getattr(response, "usage", None):
         try:
             record_cost_metric(
@@ -236,6 +240,8 @@ async def generate_context_summary(
                 prompt_tokens=response.usage.prompt_tokens or 0,
                 completion_tokens=response.usage.completion_tokens or 0,
                 call_type="compaction_summary",
+                ttft=t_latency,
+                total_latency=t_latency,
             )
         except Exception:
             pass

@@ -103,7 +103,7 @@ def _is_rate_limit_or_resource_exhausted(exception: Exception) -> bool:
 
 
 @retry(
-    stop=stop_after_attempt(2), # Stop retrying after 5 failed attempts
+    stop=stop_after_attempt(5), # Stop retrying after 5 failed attempts
     # Exponential backoff with random jitter to prevent sync spikes / thundering herd
     wait=wait_random_exponential(multiplier=1, max=16),
     retry=retry_if_exception(_is_rate_limit_or_resource_exhausted),
@@ -266,6 +266,7 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                     {limited_diff}
                 '''
         # Use our retry-wrapped helper to protect against rate limits and resource exhaustion
+        t_start = time.perf_counter()
         response = await _create_chat_completion_with_retry({
             "model": model_name,
             "messages": [
@@ -278,6 +279,8 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                 {"role": "user", "content": prompt},
             ],
         })
+        t_latency = round(time.perf_counter() - t_start, 3)
+
         if getattr(response, "usage", None):
             try:
                 record_cost_metric(
@@ -285,6 +288,8 @@ async def generate_commit_message(diff: str, model: Optional[str] = None) -> str
                     prompt_tokens=response.usage.prompt_tokens or 0,
                     completion_tokens=response.usage.completion_tokens or 0,
                     call_type="commit_generation",
+                    ttft=t_latency,
+                    total_latency=t_latency,
                 )
             except Exception:
                 pass
@@ -310,6 +315,7 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
         cleaned_prompt = user_prompt.strip()[:300]
         
         # Use our retry-wrapped helper to protect against rate limits and resource exhaustion
+        t_start = time.perf_counter()
         response = await _create_chat_completion_with_retry({
             "model": model_name,
             "messages": [
@@ -324,6 +330,8 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
                 {"role": "user", "content": cleaned_prompt},
             ],
         })
+        t_latency = round(time.perf_counter() - t_start, 3)
+
         if getattr(response, "usage", None):
             try:
                 record_cost_metric(
@@ -331,6 +339,8 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
                     prompt_tokens=response.usage.prompt_tokens or 0,
                     completion_tokens=response.usage.completion_tokens or 0,
                     call_type="title_generation",
+                    ttft=t_latency,
+                    total_latency=t_latency,
                 )
             except Exception:
                 pass

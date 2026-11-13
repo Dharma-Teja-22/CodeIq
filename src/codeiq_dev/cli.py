@@ -4,7 +4,7 @@ from codeiq_dev.tools.git_tools import *
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.miscellaneous_tools import executeTool
 from codeiq_dev.tools.web_search_tool import DDGSearch, read_url
-
+import time
 import asyncio
 import sys
 import os
@@ -750,6 +750,8 @@ async def _generate_response(prompt: str) -> None:
     p_tokens = 0
     c_tokens = 0
     t_tokens = 0
+    start_time = time.perf_counter()
+    first_token_time = None
 
     with console.status("[bold cyan]Thinking...[/bold cyan]", spinner="arc") as status_spinner:
         # pyrefly: ignore[not-async]
@@ -767,15 +769,21 @@ async def _generate_response(prompt: str) -> None:
                 t_tokens = chunk.usage.total_tokens or (p_tokens + c_tokens)
 
             if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                if first_token_time is None:
+                    first_token_time = time.perf_counter()
                 if status_spinner:
                     status_spinner.stop()
                 console.print(chunk.choices[0].delta.content, style="green", end="")
                 printed_prefix = True
 
+    end_time = time.perf_counter()
+    total_latency = max(0.001, end_time - start_time)
+    ttft = (first_token_time - start_time) if first_token_time is not None else total_latency
+
     if printed_prefix:
         console.print()
 
-    console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens}[/dim]\n")
+    console.print(f"[dim]Tokens: Query: {p_tokens} | Completion: {c_tokens} | Total: {t_tokens} | Latency: {total_latency:.2f}s (TTFT: {ttft:.2f}s)[/dim]\n")
 
     try:
         record_cost_metric(
@@ -783,6 +791,8 @@ async def _generate_response(prompt: str) -> None:
             prompt_tokens=p_tokens,
             completion_tokens=c_tokens,
             call_type="single_turn_generate",
+            ttft=round(ttft, 3),
+            total_latency=round(total_latency, 3),
         )
     except Exception:
         pass

@@ -13,7 +13,7 @@ from tenacity import (
 )
 from codeiq_dev.core.settings import settings
 from codeiq_dev.tools.registry import tool_schema as tools
-from codeiq_dev.core.cost_metrics import record_cost_metric
+from codeiq_dev.core.cost_metrics import record_cost_metric, record_model_attempt, categorize_error
 
 logger = logging.getLogger(__name__)
 
@@ -102,15 +102,30 @@ def _is_rate_limit_or_resource_exhausted(exception: Exception) -> bool:
     return False
 
 
+def _on_retry_attempt(retry_state):
+    """Callback fired right before retry sleep to log and record the retry attempt."""
+    exc = retry_state.outcome.exception() if retry_state.outcome else None
+    model_name = settings.MODEL
+    if retry_state.args and isinstance(retry_state.args[0], dict):
+        model_name = retry_state.args[0].get("model", model_name)
+    category = categorize_error(exc)
+    record_model_attempt(
+        model_name=model_name,
+        outcome="failed",
+        error_category=category,
+        error_message=str(exc),
+        is_retry=True,
+    )
+
+
 @retry(
     stop=stop_after_attempt(5), # Stop retrying after 5 failed attempts
     # Exponential backoff with random jitter to prevent sync spikes / thundering herd
     wait=wait_random_exponential(multiplier=1, max=16),
     retry=retry_if_exception(_is_rate_limit_or_resource_exhausted),
     before=before_log(logger, logging.INFO),
-    after = after_log(logger, logging.WARNING),
-    # Hook invoked right before sleeping between retries
-    # before_sleep=_before_sleep_log,
+    after=after_log(logger, logging.WARNING),
+    before_sleep=_on_retry_attempt,
     reraise=True # reraise=True ensures that if all attempts fail, the final exception is raised to the caller
 )
 async def _create_chat_completion_with_retry(kwargs: Dict[str, Any]):
@@ -118,7 +133,21 @@ async def _create_chat_completion_with_retry(kwargs: Dict[str, Any]):
     Helper wrapper around client.chat.completions.create protected by tenacity 
     jittered exponential backoff for 429 / resource exhausted / quota errors.
     """
-    return await client.chat.completions.create(**kwargs)
+    model_name = kwargs.get("model", settings.MODEL)
+    try:
+        response = await client.chat.completions.create(**kwargs)
+        record_model_attempt(model_name=model_name, outcome="success")
+        return response
+    except Exception as exc:
+        category = categorize_error(exc)
+        record_model_attempt(
+            model_name=model_name,
+            outcome="failed",
+            error_category=category,
+            error_message=str(exc),
+            is_retry=False,
+        )
+        raise
 
 
 async def create_chat_stream(
@@ -221,6 +250,15 @@ async def stream_chat_turn(
     except Exception as e:
         # Capture the exact underlying exception message (e.g. 429 Rate Limit, Quota Exceeded, etc.)
         # and return it as the assistant message so it renders directly in the UI.
+        category = categorize_error(e)
+        model_name = model or settings.MODEL
+        record_model_attempt(
+            model_name=model_name,
+            outcome="failed",
+            error_category=category,
+            error_message=str(e),
+            is_retry=False,
+        )
         error_msg = f"Error communicating with AI service: {str(e)}"
         raise Exception(error_msg)
         # return AssistantMessage(error_msg, []), {"query_tokens": 0, "completion_tokens": 0, "session_tokens": 0}

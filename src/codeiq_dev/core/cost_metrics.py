@@ -89,6 +89,8 @@ def load_cost_metrics() -> Dict[str, Any]:
                 summary = usage_data.get("_summary", {})
                 logs = usage_data.get("_logs", [])
                 updated_at = usage_data.get("_updated_at", datetime.now().isoformat())
+                compactions = usage_data.get("_compactions", [])
+                model_health = usage_data.get("_model_health", {})
 
                 # Reconstruct daily_metrics
                 daily_metrics: Dict[str, Any] = {}
@@ -110,6 +112,8 @@ def load_cost_metrics() -> Dict[str, Any]:
                     "summary": summary,
                     "daily_metrics": daily_metrics,
                     "logs": logs,
+                    "compactions": compactions,
+                    "model_health": model_health,
                 }
         except Exception as exc:
             logger.debug("Failed to read usage_data.js: %s", exc)
@@ -122,9 +126,14 @@ def load_cost_metrics() -> Dict[str, Any]:
             "total_tokens": 0,
             "total_cost_usd": 0.0,
             "total_turns": 0,
+            "total_requests_success": 0,
+            "total_requests_failed": 0,
+            "overall_success_rate_pct": 100.0,
         },
         "daily_metrics": {},
         "logs": [],
+        "compactions": [],
+        "model_health": {},
     }
 
 
@@ -232,14 +241,134 @@ def record_cost_metric(
     return record
 
 
+# Canonical Error Categories specified for Gemini API requests
+ERROR_CATEGORIES = [
+    "429 – Rate Limit / Quota Exceeded",
+    "400 – Invalid Request",
+    "401/403 – Authentication / Permission",
+    "500/503 – Server / Service Unavailable",
+    "Timeout – Request Timeout",
+    "Other – Unexpected Errors",
+]
+
+
+def categorize_error(exc: Any) -> str:
+    """
+    Categorize an exception or error message into one of the canonical categories:
+    - 429 – Rate Limit / Quota Exceeded
+    - 400 – Invalid Request
+    - 401/403 – Authentication / Permission
+    - 500/503 – Server / Service Unavailable
+    - Timeout – Request Timeout
+    - Other – Unexpected Errors
+    """
+    s = str(exc or "").lower()
+    if any(k in s for k in ("429", "quota", "resource_exhausted", "resourceexhausted", "rate limit", "rate_limit")):
+        return "429 – Rate Limit / Quota Exceeded"
+    elif any(k in s for k in ("400", "invalid", "bad request", "bad_request")):
+        return "400 – Invalid Request"
+    elif any(k in s for k in ("401", "403", "unauthorized", "permission", "forbidden", "api key", "apikey", "credential")):
+        return "401/403 – Authentication / Permission"
+    elif any(k in s for k in ("500", "503", "502", "504", "server error", "service unavailable", "internal server")):
+        return "500/503 – Server / Service Unavailable"
+    elif any(k in s for k in ("timeout", "timed out", "deadline")):
+        return "Timeout – Request Timeout"
+    else:
+        return "Other – Unexpected Errors"
+
+
+def record_model_attempt(
+    model_name: str,
+    outcome: str = "success",
+    error_category: Optional[str] = None,
+    error_message: Optional[str] = None,
+    is_retry: bool = False,
+) -> None:
+    """
+    Record an LLM request attempt, tracking success/failure outcomes,
+    retries, and error categorization dynamically.
+    """
+    try:
+        metrics = load_cost_metrics()
+        now_iso = datetime.now().isoformat()
+        metrics["updated_at"] = now_iso
+
+        summary = metrics.setdefault("summary", {})
+        health_map = metrics.setdefault("model_health", {})
+
+        m_health = health_map.setdefault(
+            model_name,
+            {
+                "total_calls": 0,
+                "retries": 0,
+                "errors": 0,
+                "retry_rate_pct": 0.0,
+                "error_rate_pct": 0.0,
+                "error_types": {},
+            },
+        )
+
+        m_health["total_calls"] = m_health.get("total_calls", 0) + 1
+
+        if is_retry:
+            m_health["retries"] = m_health.get("retries", 0) + 1
+            summary["total_model_retries"] = summary.get("total_model_retries", 0) + 1
+
+        if outcome == "success":
+            summary["total_requests_success"] = summary.get("total_requests_success", 0) + 1
+        else:
+            # Outcome failed
+            summary["total_requests_failed"] = summary.get("total_requests_failed", 0) + 1
+            m_health["errors"] = m_health.get("errors", 0) + 1
+            summary["total_model_errors"] = summary.get("total_model_errors", 0) + 1
+
+            cat = error_category or categorize_error(error_message)
+            err_types = m_health.setdefault("error_types", {})
+            err_types[cat] = err_types.get(cat, 0) + 1
+
+            # Update overall error categories breakdown in summary
+            summary_cats = summary.setdefault("error_categories_summary", {})
+            summary_cats[cat] = summary_cats.get(cat, 0) + 1
+
+            if error_message:
+                m_health["last_error"] = str(error_message)[:200]
+                m_health["last_error_at"] = now_iso
+
+        # Calculate percentages
+        t_calls = m_health.get("total_calls", 1)
+        r_calls = m_health.get("retries", 0)
+        e_calls = m_health.get("errors", 0)
+        m_health["retry_rate_pct"] = round((r_calls / (t_calls + r_calls)) * 100.0, 2) if (t_calls + r_calls) > 0 else 0.0
+        m_health["error_rate_pct"] = round((e_calls / t_calls) * 100.0, 2) if t_calls > 0 else 0.0
+
+        # Calculate overall success rate
+        tot_succ = summary.get("total_requests_success", 0)
+        tot_fail = summary.get("total_requests_failed", 0)
+        tot_reqs = tot_succ + tot_fail
+        summary["overall_success_rate_pct"] = round((tot_succ / tot_reqs) * 100.0, 2) if tot_reqs > 0 else 100.0
+
+        # Calculate overall retry & error rates
+        all_calls = sum(h.get("total_calls", 0) for h in health_map.values())
+        all_retries = sum(h.get("retries", 0) for h in health_map.values())
+        all_errors = sum(h.get("errors", 0) for h in health_map.values())
+        summary["overall_retry_rate_pct"] = round((all_retries / (all_calls + all_retries)) * 100.0, 2) if (all_calls + all_retries) > 0 else 0.0
+        summary["overall_error_rate_pct"] = round((all_errors / all_calls) * 100.0, 2) if all_calls > 0 else 0.0
+
+        _export_usage_data_js(metrics)
+    except Exception as exc:
+        logger.debug("Failed to record model attempt: %s", exc)
+
+
 def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
     """
     Export metrics to usage_data.js strictly in the Path.home() / .codeiq / metrics
-    directory. Includes P50, P95, and TTFT telemetry calculations.
+    directory. Includes P50, P95, TTFT, Throughput, and Reliability diagnostics.
     """
     try:
         daily = metrics.get("daily_metrics", {})
         logs = metrics.get("logs", [])
+        compactions = metrics.get("compactions", [])
+        model_health = metrics.get("model_health", {})
 
         # Overall latency and TTFT percentiles
         all_lats = [l["total_latency"] for l in logs if "total_latency" in l]
@@ -251,6 +380,22 @@ def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
         summary["avg_ttft"] = round(sum(all_ttfts) / len(all_ttfts), 3) if all_ttfts else 0.0
         summary["p95_ttft"] = _percentile(all_ttfts, 0.95)
 
+        # Output throughput calculation (output tokens / generation latency)
+        all_tps = []
+        for l in logs:
+            c_tokens = l.get("completion_tokens", 0)
+            lat = l.get("total_latency")
+            ttft = l.get("ttft")
+            if c_tokens and lat and lat > 0:
+                gen_time = max(0.01, (lat - ttft)) if (ttft is not None and lat > ttft) else lat
+                tps = round(c_tokens / gen_time, 2)
+                l["throughput"] = tps
+                all_tps.append(tps)
+
+        if all_tps:
+            summary["avg_throughput_tps"] = round(sum(all_tps) / len(all_tps), 2)
+            summary["p95_throughput_tps"] = _percentile(all_tps, 0.95)
+
         usage_data: Dict[str, Any] = {}
         for d, models_dict in daily.items():
             usage_data[d] = {}
@@ -258,6 +403,9 @@ def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
                 m_logs = [l for l in logs if l.get("date") == d and l.get("model") == m]
                 m_lats = [l["total_latency"] for l in m_logs if "total_latency" in l]
                 m_ttfts = [l["ttft"] for l in m_logs if "ttft" in l]
+                m_tps = [l["throughput"] for l in m_logs if "throughput" in l and l["throughput"] is not None]
+
+                m_health_entry = model_health.get(m, {})
 
                 usage_data[d][m] = {
                     "prompt_tokens": vals.get("prompt_tokens", 0),
@@ -269,13 +417,19 @@ def _export_usage_data_js(metrics: Dict[str, Any]) -> None:
                     "p95_latency": _percentile(m_lats, 0.95),
                     "avg_ttft": round(sum(m_ttfts) / len(m_ttfts), 3) if m_ttfts else 0.0,
                     "p95_ttft": _percentile(m_ttfts, 0.95),
+                    "avg_throughput_tps": round(sum(m_tps) / len(m_tps), 2) if m_tps else 0.0,
+                    "p95_throughput_tps": _percentile(m_tps, 0.95),
+                    "retry_rate_pct": m_health_entry.get("retry_rate_pct", 0.0),
+                    "error_rate_pct": m_health_entry.get("error_rate_pct", 0.0),
                 }
 
         usage_data["_summary"] = summary
         usage_data["_logs"] = logs
+        usage_data["_compactions"] = compactions
+        usage_data["_model_health"] = model_health
         usage_data["_updated_at"] = metrics.get("updated_at", "")
 
-        js_content = f"window.USAGE_DATA = {json.dumps(usage_data, indent=2, ensure_ascii=False)};\n"
+        js_content = f"// Auto-generated by CodeIq Cost Metrics Tracker\nwindow.USAGE_DATA = {json.dumps(usage_data, indent=2, ensure_ascii=False)};\n"
 
         target_dir = Path.home() / ".codeiq" / "metrics"
         try:

@@ -42,6 +42,7 @@ from codeiq_dev.core.llm import (
 )
 from codeiq_dev.core.compaction import maybe_compact_session
 from codeiq_dev.core.cost_metrics import record_cost_metric, load_cost_metrics, METRICS_FILE
+from codeiq_dev.core.guardrails import EnvGuardrail
 from codeiq_dev.core.session import (
     SESSIONS_DIR,
     append_message,
@@ -289,12 +290,14 @@ async def _chat(session_id: Optional[str] = None):
                         if status_spinner and status_spinner._live.is_started:
                             status_spinner.stop()
                         final_response += tok
+                        # Clean stream content of accidental secrets before rendering to screen
+                        display_text = EnvGuardrail.sanitize_for_display(final_response)
                         # Start Live display once on first token
                         if live is None:
-                            live = Live(Markdown(final_response), console=console, refresh_per_second=10)
+                            live = Live(Markdown(display_text), console=console, refresh_per_second=10)
                             live.start()
                         else:
-                            live.update(Markdown(final_response))
+                            live.update(Markdown(display_text))
 
                     assistant_message, usage_info = await stream_chat_turn(
                         messages=messages,
@@ -561,7 +564,9 @@ async def _chat(session_id: Optional[str] = None):
                         result = f"Tool execution failed: {exc}"
                         console.print(f"[bold red]Tool execution error:[/bold red] {exc}")
 
-                    tool_resp = {"role": "tool", "tool_call_id": tool_call.id, "content": str(result)}
+                    # Mask tool execution output before adding to session messages and context
+                    safe_content = EnvGuardrail.mask_text(str(result))
+                    tool_resp = {"role": "tool", "tool_call_id": tool_call.id, "content": safe_content}
                     messages.append(tool_resp)
                     append_message(session, tool_resp)
 
@@ -773,7 +778,8 @@ async def _generate_response(prompt: str) -> None:
                     first_token_time = time.perf_counter()
                 if status_spinner:
                     status_spinner.stop()
-                console.print(chunk.choices[0].delta.content, style="green", end="")
+                masked_chunk = EnvGuardrail.sanitize_for_display(chunk.choices[0].delta.content)
+                console.print(masked_chunk, style="green", end="")
                 printed_prefix = True
 
     end_time = time.perf_counter()

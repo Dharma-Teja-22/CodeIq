@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Union
+from codeiq_dev.core.guardrails import EnvGuardrail
 
 IGNORE_DIRS = {"node_modules", ".git", "venv", ".env", ".venv", "env", "__pycache__","dist", "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",".turbo", ".next", ".nuxt", ".cache", ".idea", ".vscode", ".vs",".coverage", "htmlcov"}
 IGNORE_EXTS = {".pyc", ".pyo", ".pyd"}
@@ -42,8 +43,6 @@ def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> Li
     except Exception:
         return []
 
-PROTECTED_FILES = {".env", ".env.local", ".env.production", ".env.development", ".env.test"}
-
 def is_protected_file(path_or_name: Union[str, Path]) -> bool:
     """
     Check if the target filename is a protected sensitive file (e.g. .env).
@@ -54,12 +53,7 @@ def is_protected_file(path_or_name: Union[str, Path]) -> bool:
     Returns:
         bool: True if the file is protected/sensitive, False otherwise.
     """
-    try:
-        p = Path(path_or_name)
-        name = p.name.lower()
-        return name in PROTECTED_FILES or name.startswith(".env.") or name.endswith(".env")
-    except Exception:
-        return False
+    return EnvGuardrail.is_blocked_file(path_or_name)
 
 def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Path] = ".") -> Union[Path, str, List[Path]]:
     """
@@ -91,7 +85,7 @@ def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Pa
 
 def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
     """
-    Find a file and read its content as text.
+    Find a file and read its content as text safely with EnvGuardrail.
 
     Args:
         filename (str): Name or path of the file to read.
@@ -101,7 +95,13 @@ def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
         str: File content as a string, list of candidate matches, or error message.
     """
     if is_protected_file(filename):
-        return "Access denied: Reading .env and sensitive environment files is strictly prohibited for security reasons."
+        try:
+            # Safely return only masked variable names so agent understands schema without seeing secrets
+            resolved = resolveFilePath(filename, target_directory=target_directory)
+            target = resolved if isinstance(resolved, Path) else filename
+            return EnvGuardrail.safe_read_file(target, allow_env_schema=True)
+        except Exception as e:
+            return f"Access denied: Reading .env and sensitive environment files is strictly restricted. ({e})"
 
     resolved = resolveFilePath(filename, target_directory=target_directory)
     if isinstance(resolved, str):
@@ -110,8 +110,7 @@ def readFile(filename: str, target_directory: Union[str, Path] = ".") -> str:
         return f"Multiple files found for '{filename}':\n" + "\n".join(f" - {f}" for f in resolved)
 
     try:
-        with open(resolved, "r", encoding="utf-8") as f:
-            return f.read()
+        return EnvGuardrail.safe_read_file(resolved, allow_env_schema=False)
     except Exception as e:
         return f"Error reading file '{resolved}': {e}"
 

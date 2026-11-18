@@ -14,6 +14,7 @@ from tenacity import (
 from codeiq_dev.core.settings import settings
 from codeiq_dev.tools.registry import tool_schema as tools
 from codeiq_dev.core.cost_metrics import record_cost_metric, record_model_attempt, categorize_error
+from codeiq_dev.core.guardrails import EnvGuardrail
 
 logger = logging.getLogger(__name__)
 
@@ -28,18 +29,20 @@ _ALLOWED_MESSAGE_KEYS = frozenset({"role", "content", "name", "tool_call_id", "t
 
 def to_llm_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
-    Sanitize messages for the LLM API by stripping internal metadata.
+    Sanitize messages for the LLM API by stripping internal metadata
+    and scrubbing any secrets, credentials, or .env values with EnvGuardrail.
 
     Args:
         messages (List[Dict[str, Any]]): Raw session messages.
 
     Returns:
-        List[Dict[str, Any]]: Messages containing only keys accepted by OpenAI chat APIs.
+        List[Dict[str, Any]]: Messages containing only keys accepted by OpenAI chat APIs with masked secrets.
     """
-    return [
+    clean_messages = [
         {k: v for k, v in message.items() if k in _ALLOWED_MESSAGE_KEYS}
         for message in messages
     ]
+    return EnvGuardrail.sanitize_messages(clean_messages)
 
 
 async def close_client() -> None:

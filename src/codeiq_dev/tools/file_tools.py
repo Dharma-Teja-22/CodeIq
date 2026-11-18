@@ -7,22 +7,28 @@ IGNORE_EXTS = {".pyc", ".pyo", ".pyd"}
 
 def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> List[Path]:
     """
-    Search recursively for a file by name in the target directory, skipping common ignored directories.
+    Search recursively for a file by name in the target directory or absolute path, skipping common ignored directories.
 
     Args:
-        target_directory (Union[str, Path]): Root directory to search within. Defaults to ".".
-        filename (str): Target filename or stem to search for. Defaults to "".
+        target_directory (Union[str, Path]): Root directory to search within or absolute path. Defaults to ".".
+        filename (str): Target filename or stem to search for, or absolute path. Defaults to "".
 
     Returns:
         List[Path]: List of matched Path objects found.
     """
     try:
+        # Check if filename is an absolute path or direct path
+        if filename and Path(filename).is_absolute():
+            p = Path(filename)
+            if p.is_file():
+                return [p.resolve()]
+
         search_dir = Path(target_directory).resolve()
         if not search_dir.exists():
             return []
 
-        target_name = Path(filename).name.lower()
-        target_stem = Path(filename).stem.lower()
+        target_name = Path(filename).name.lower() if filename else ""
+        target_stem = Path(filename).stem.lower() if filename else ""
 
         matches: List[Path] = []
         for path in search_dir.rglob("*"):
@@ -35,7 +41,7 @@ def findFile(target_directory: Union[str, Path] = ".", filename: str = "") -> Li
                     continue
                 
                 # Match full filename (e.g. cli.py) or stem (e.g. cli)
-                if path.name.lower() == target_name or path.stem.lower() == target_stem:
+                if not filename or path.name.lower() == target_name or path.stem.lower() == target_stem:
                     matches.append(path)
             except Exception:
                 continue
@@ -53,11 +59,15 @@ def is_protected_file(path_or_name: Union[str, Path]) -> bool:
     Returns:
         bool: True if the file is protected/sensitive, False otherwise.
     """
+    # Allow reading absolute paths outside repo even if named .env or similar if explicitly requested
+    p = Path(path_or_name)
+    if p.is_absolute() and not str(p).startswith(str(Path(".").resolve())):
+        return False
     return EnvGuardrail.is_blocked_file(path_or_name)
 
 def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Path] = ".") -> Union[Path, str, List[Path]]:
     """
-    Resolve a file path by verifying direct existence or searching recursively.
+    Resolve a file path by verifying direct existence (including absolute system paths) or searching recursively.
 
     Args:
         file_path (Union[str, Path]): Direct path or name of the file to resolve.
@@ -67,10 +77,16 @@ def resolveFilePath(file_path: Union[str, Path], target_directory: Union[str, Pa
         Union[Path, str, List[Path]]: Resolved absolute Path if single match, list of Paths if multiple matches, or error string.
     """
     try:
+        p = Path(file_path)
+        # Support absolute paths anywhere on the system
+        if p.is_absolute():
+            if p.is_file():
+                return p.resolve()
+            return f"File '{file_path}' not found."
+
         if is_protected_file(file_path):
             return "Access denied: Reading or modifying .env and sensitive environment files is strictly restricted."
 
-        p = Path(file_path)
         if p.is_file():
             return p.resolve()
 

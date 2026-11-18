@@ -2,8 +2,20 @@ from codeiq_dev.tools.miscellaneous_tools import executeTool
 from codeiq_dev.tools.file_tools import fileOperation
 from codeiq_dev.tools.git_tools import gitOperation
 from codeiq_dev.tools.web_search_tool import DDGSearch, read_url
+from codeiq_dev.core.skills import skill_manager
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+
+def run_skill(skill_identifier: str) -> str:
+    """
+    Locates, loads, and executes the specified skill by name or path within the sandbox environment,
+    saving the resulting outputs into the Skill_results directory.
+    """
+    try:
+        results_dir = skill_manager.execute_skill(skill_identifier)
+        return f"Successfully executed skill '{skill_identifier}'. Output saved to: {results_dir}"
+    except Exception as e:
+        return f"Error executing skill '{skill_identifier}': {str(e)}"
 
 # Tool schemas available for LLM function calling
 tool_schema: List[Dict[str, Any]] = [
@@ -49,11 +61,12 @@ tool_schema: List[Dict[str, Any]] = [
         "function": {
             "name": "fileOperations",
             "description": (
-                "Perform file operations in the project. "
+                "Perform file operations. "
                 "read_file: Read content of a file. "
                 "write_file: Write or create a completely new file when explicitly requested. DO NOT use write_file to duplicate an existing file when fixing errors. "
                 "replace_content: Replace an existing specific block of code in an existing file with corrected or updated code. "
-                "find_file: Search for a file by name."
+                "find_file: Search for a file by name. "
+                "Note: For skill-related tasks, generated files and temporary scripts must be created inside ~/.codeiq/sandbox/."
             ),
             "parameters": {
                 "type": "object",
@@ -65,7 +78,7 @@ tool_schema: List[Dict[str, Any]] = [
                     },
                     "file_path": {
                         "type": "string",
-                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'app.py').",
+                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'C:/Users/dlankada/.codeiq/sandbox/script.py').",
                     },
                     "content": {
                         "type": "string",
@@ -89,21 +102,25 @@ tool_schema: List[Dict[str, Any]] = [
         "function": {
             "name": "executeTool",
             "description": (
-                "Execute a single short-running, non-interactive terminal command in the user's project environment. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes, including development servers, production servers, file watchers, monitoring utilities, interactive shells, REPL sessions, or commands that wait indefinitely for input. Examples of prohibited commands include npm start, npm run dev, yarn dev, pnpm dev, vite, nodemon, next dev, uvicorn, gunicorn, flask run, streamlit run, watch, top, htop, and tail -f. Never bypass these restrictions through command chaining, shell wrappers, or background execution. If the requested operation requires a continuous or long-running process, inform the user that it is not supported instead of invoking this tool. Execute only commands directly related to the user's request, enforce the configured execution timeout, and report the execution result clearly. If execution fails or times out, communicate the error without automatically retrying. Keep the returned output concise and limit it to approximately 350 characters, clearly indicating when the output has been truncated."
+                "Execute a single short-running, non-interactive terminal command. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. For skill-related operations (such as npm install, pip install, node script execution, python script execution), pass cwd pointing to ~/.codeiq/sandbox or execute within ~/.codeiq/sandbox so the main repository is not polluted. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "command": {
                         "type": "string",
-                        "description": "The exact, complete terminal command that needs to be executed. Provide only one short-running, non-interactive command that is directly relevant to the user's request and is expected to complete within the configured timeout. Do not include explanations, Markdown formatting, or additional instructions. Avoid destructive or irreversible operations unless explicitly authorized. Do not provide commands that start servers, background processes, watchers, monitoring utilities, interactive shells, REPL sessions, infinite loops, or processes that require continuous execution. Do not chain multiple commands using &&, ||, ;, pipes, or shell wrappers to bypass execution restrictions. The command must be suitable for execution in the user's project environment and must be presented to the user for explicit approval before execution.",
-                    }
+                        "description": "The exact, complete terminal command that needs to be executed.",
+                    },
+                    "cwd": {
+                        "type": "string",
+                        "description": "Optional working directory in which to execute the command (e.g. 'C:/Users/dlankada/.codeiq/sandbox' for skill operations).",
+                    },
                 },
                 "required": ["command"],
             },
         },
     },
-        {
+    {
         "type": "function",
         "function": {
             "name": "webSearch",
@@ -137,7 +154,28 @@ tool_schema: List[Dict[str, Any]] = [
             },
         },
     },
-
+    {
+        "type": "function",
+        "function": {
+            "name": "executeSkill",
+            "description": (
+                "Execute a specialized skill loaded in the system by name or path. "
+                "Use this tool whenever the user's request matches an available specialized skill (e.g., pdf, docx, pptx, xlsx, frontend-design) "
+                "or when the user explicitly requests to run/apply a skill by name or path. "
+                "The skill executes in the sandbox at ~/.codeiq/sandbox and all final outputs are rendered exclusively into the project's Skill_results directory."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "skill_name": {
+                        "type": "string",
+                        "description": "The name or path of the skill to execute (e.g., 'pdf', 'docx', 'xlsx', 'pptx', 'frontend-design', or a file/folder path).",
+                    }
+                },
+                "required": ["skill_name"],
+            },
+        },
+    },
 ]
 
 # Tools
@@ -146,5 +184,6 @@ tools = {
     "fileOperations": fileOperation,
     "executeTool": executeTool,
     "webSearch": DDGSearch,
-    "fetchWebpageMarkdown": read_url
+    "fetchWebpageMarkdown": read_url,
+    "executeSkill": run_skill,
 }

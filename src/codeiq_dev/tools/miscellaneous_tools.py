@@ -1,6 +1,7 @@
 import subprocess
 import shlex # Splits shell commands into individual arguments safely for inspection.
 from pathlib import Path
+from typing import Optional
 import typer
 from rich.console import Console
 from codeiq_dev.tools.file_tools import findFile
@@ -50,33 +51,21 @@ def is_continuous_or_long_running(command: str) -> bool:
     if not parts:
         return False
 
-    base_cmd = parts[0]
-
-    # Continuous utilities
-    if base_cmd in {"watch", "top", "htop", "ssh", "telnet", "ftp"}:
-        return True
-
-    # tail -f / tail --follow
-    if base_cmd == "tail" and any(arg in parts for arg in ("-f", "--follow")):
-        return True
-
-    # ping -t (continuous ping on Windows)
-    if base_cmd == "ping" and "-t" in parts:
-        return True
-
-    # Pure interactive REPL with no arguments/scripts
-    if base_cmd in {"python", "python3", "py", "node"} and len(parts) == 1:
-        return True
+    first = parts[0]
+    # Block python/node/etc when invoked without any script or code args (interactive shell)
+    if first in {"python", "python3", "py", "node", "ruby", "perl", "php"}:
+        if len(parts) == 1:
+            return True
 
     return False
 
 
 def truncate_output(text: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
     """
-    Truncates output to approximately max_length characters to keep it concise and readable.
+    Truncate terminal output text to approximately max_length characters with an indicator.
 
     Args:
-        text (str): Raw string output to be truncated.
+        text (str): String output to inspect and truncate if necessary.
         max_length (int): Maximum character limit. Defaults to MAX_OUTPUT_LENGTH (350).
 
     Returns:
@@ -88,7 +77,12 @@ def truncate_output(text: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
     return f"{truncated}\n... [Output truncated to ~{max_length} characters]"
 
 
-def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confirm: bool = True) -> str:
+def executeTool(
+    command: str,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    ask_confirm: bool = True,
+    cwd: Optional[str] = None,
+) -> str:
     """
     Executes a short-running, non-continuous shell command using subprocess.
     Prompts the user for confirmation before executing.
@@ -98,6 +92,7 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
         command (str): Shell command to execute.
         timeout (int): Timeout in seconds to enforce non-continuous termination.
         ask_confirm (bool): Whether to prompt the user for confirmation.
+        cwd (str, optional): Directory to execute the command in.
 
     Returns:
         str: Captured command output (or error/cancellation message), truncated to ~350 chars.
@@ -125,8 +120,9 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
         parts = shlex.split(cmd)
         if len(parts) >= 2 and parts[0].lower() in {"python", "python3", "py"}:
             script_candidate = Path(parts[1])
-            if not script_candidate.exists() and not script_candidate.is_absolute():
-                matches = findFile(target_directory=".", filename=str(script_candidate))
+            search_dir = cwd if cwd else "."
+            if not (Path(search_dir) / script_candidate).exists() and not script_candidate.is_absolute():
+                matches = findFile(target_directory=search_dir, filename=str(script_candidate))
                 if matches:
                     resolved_script = str(matches[0])
                     # Reconstruct command with resolved script path
@@ -138,6 +134,8 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
     # Ask user confirmation before executing
     if ask_confirm:
         console.print(f"\n[bold yellow]Command to execute:[/bold yellow] [bold cyan]{cmd}[/bold cyan]")
+        if cwd:
+            console.print(f"[dim]Working directory: {cwd}[/dim]")
         confirmed = typer.confirm("Do you want to execute this command?", default=False)
         if not confirmed:
             return "Command execution cancelled by user."
@@ -149,6 +147,7 @@ def executeTool(command: str, timeout: int = DEFAULT_TIMEOUT_SECONDS, ask_confir
             capture_output=True,
             text=True,
             timeout=timeout,
+            cwd=cwd,
         )
 
         stdout = result.stdout.strip() if result.stdout else ""

@@ -14,3 +14,7 @@ wheels/
 usage_data.js
 cost_metrics.json
 dashboard_cost_metrics.html
+
+# Skill results output folder
+Skill_results/
+

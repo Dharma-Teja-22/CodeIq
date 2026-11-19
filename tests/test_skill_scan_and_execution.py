@@ -7,8 +7,8 @@ src_path = Path(__file__).resolve().parent.parent / "src"
 if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
-from codeiq_dev.utils.skillMap import SkillMap
-from codeiq_dev.core.skills import SkillManager
+from neo.utils.skillMap import SkillMap
+from neo.core.skills import SkillManager
 
 
 class TestSkillMapAndManager(unittest.TestCase):

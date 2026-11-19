@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-# Default session storage path: C:\Users\<username>\.codeiq\sessions
-SESSIONS_DIR = Path.home() / ".codeiq" / "sessions"
+# Default session storage path: C:\Users\<username>\.neo\sessions
+SESSIONS_DIR = Path.home() / ".neo" / "sessions"
 
 
 def _ensure_sessions_dir() -> Path:

@@ -1,7 +1,7 @@
 from dotenv import load_dotenv
 from openai import OpenAI
 import subprocess
-from codeiq_dev.core.settings import settings
+from neo.core.settings import settings
 
 load_dotenv()
 

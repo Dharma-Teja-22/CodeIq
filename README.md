@@ -1,11 +1,11 @@
-# CodeIQ
+# Neo
 
-CodeIQ is an AI-powered developer CLI toolkit designed to accelerate your development workflows. It streamlines daily software development tasks by bringing intelligent assistance and Git automation directly to your terminal.
+Neo is an AI-powered developer CLI toolkit designed to accelerate your development workflows. It streamlines daily software development tasks by bringing intelligent assistance and Git automation directly to your terminal.
 
 ## Key Features
 
 - **Interactive AI Chat & Multi-Turn Sessions**: Ask technical questions, edit code, execute commands, and maintain conversation context across sessions.
-- **Session Management**: Persistent JSON sessions stored cleanly in `~/.codeiq/sessions/`, with commands to list, resume, or close sessions.
+- **Session Management**: Persistent JSON sessions stored cleanly in `~/.neo/sessions/`, with commands to list, resume, or close sessions.
 - **AI-Powered Conventional Commits**: Automatically analyze staged git changes to generate standardized, descriptive conventional commit messages.
 - **Git & File Operations Support**: Perform essential Git actions, file reads/edits, web searches, and command executions seamlessly with terminal status indicators.
 
@@ -21,7 +21,7 @@ If you are setting it up for the first time, clone the repository:
 
 ```bash
 git clone <repo-url>
-cd CodeIq
+cd neo
 ```
 
 If you already have the repository locally and want the latest changes, pull updates:
@@ -82,70 +82,70 @@ Once installed, use the CLI commands directly in your terminal:
 
 ### 1. AI Chat & Session Management
 
-CodeIQ automatically persists conversations in JSON format under `~/.codeiq/sessions/` (`C:\Users\<username>\.codeiq\sessions\` on Windows), keeping your repository clean.
+neo automatically persists conversations in JSON format under `~/.neo/sessions/` (`C:\Users\<username>\.neo\sessions\` on Windows), keeping your repository clean.
 
 - **Start a new chat session**:
   ```bash
-  codeiq chat
+  neo chat
   ```
 
 - **Resume the latest chat session**:
   ```bash
-  codeiq chat --resume
+  neo chat --resume
   # or short flag:
-  codeiq chat -r
+  neo chat -r
   ```
 
 - **Resume a specific session (by session ID or prefix)**:
   ```bash
-  codeiq chat --session <session_id>
+  neo chat --session <session_id>
   # or short flag:
-  codeiq chat -s "CodeIq_Dev-Auto Compaction Not Triggering"
+  neo chat -s "neo-Auto Compaction Not Triggering"
   ```
 
 - **List all saved sessions** (renders a clean list with only session ID and status):
   ```bash
-  codeiq sessions
+  neo sessions
   ```
   *Output example:*
   ```text
-  Sessions (C:\Users\<username>\.codeiq\sessions):
+  Sessions (C:\Users\<username>\.neo\sessions):
 
-  • CodeIq_Dev-Auto Compaction Not Triggering [active]
-  • CodeIq_Dev-Fix Database Migration [closed]
+  • neo-Auto Compaction Not Triggering [active]
+  • neo-Fix Database Migration [closed]
   ```
 
 - **Soft delete a session** (prevents listing and reopening):
   ```bash
-  codeiq sessions --delete <session_id>
+  neo sessions --delete <session_id>
   # or short flag:
-  codeiq sessions -d <session_id>
+  neo sessions -d <session_id>
   ```
 
 - **Permanently purge soft-deleted sessions**:
   ```bash
   # Purge all soft-deleted sessions at once
-  codeiq sessions --purge all
+  neo sessions --purge all
 
   # Or purge a single soft-deleted session by ID or prefix
-  codeiq sessions --purge <session_id>
+  neo sessions --purge <session_id>
   ```
 
 - **Restore a soft-deleted session**:
   ```bash
-  codeiq sessions --restore <session_id>
+  neo sessions --restore <session_id>
   ```
 
 - **Include soft-deleted sessions in the list**:
   ```bash
-  codeiq sessions --show-deleted
+  neo sessions --show-deleted
   ```
 
 - **Close a session from CLI** (marks status as closed without deleting):
   ```bash
-  codeiq sessions --close <session_id>
+  neo sessions --close <session_id>
   # or short flag:
-  codeiq sessions -c <session_id>
+  neo sessions -c <session_id>
   ```
 
 - **In-Chat Commands**:
@@ -159,16 +159,16 @@ CodeIQ automatically persists conversations in JSON format under `~/.codeiq/sess
 
 - **One-off AI prompt**:
   ```bash
-  codeiq generate-response "How do I optimize a SQL query?"
+  neo generate-response "How do I optimize a SQL query?"
   ```
 
 - **Select or configure AI models**:
   ```bash
   # Interactive arrow-key model selector
-  codeiq models
+  neo models
 
   # Add a new model to config
-  codeiq models --add <model_name>
+  neo models --add <model_name>
   ```
 
 ---
@@ -177,17 +177,17 @@ CodeIQ automatically persists conversations in JSON format under `~/.codeiq/sess
 
 - **Stage files**:
   ```bash
-  codeiq add .
+  neo add .
   ```
 
 - **Generate an AI commit message and commit**:
   ```bash
-  codeiq commit
+  neo commit
   ```
 
 - **Perform Git operations**:
   ```bash
-  codeiq git --type push
-  codeiq git --type pull
-  codeiq git --type branch
+  neo git --type push
+  neo git --type pull
+  neo git --type branch
   ```

@@ -3,9 +3,9 @@ from pathlib import Path
 from typing import Any, Dict
 
 # The configuration file path is now user-specific based on the requirement.
-# Target: C:\Users\<username>\.codeiq\models\.codeiq_config.json
-CONFIG_DIR = Path.home() / ".codeiq" / "models"
-CONFIG_FILE = CONFIG_DIR / ".codeiq_config.json"
+# Target: C:\Users\<username>\.neo\models\.neo_config.json
+CONFIG_DIR = Path.home() / ".neo" / "models"
+CONFIG_FILE = CONFIG_DIR / ".neo_config.json"
 DEFAULT_PROVIDER = "gemini"
 
 def _ensure_config_dir() -> None:
@@ -17,7 +17,7 @@ def _ensure_config_dir() -> None:
 
 def load_config() -> Dict[str, Any]:
     """
-    Load configuration from the user-specific .codeiq_config.json.
+    Load configuration from the user-specific .neo_config.json.
 
     Args:
         None
@@ -37,7 +37,7 @@ def load_config() -> Dict[str, Any]:
 
 def save_config(data: Dict[str, Any]) -> None:
     """
-    Save configuration dictionary to the user-specific .codeiq_config.json.
+    Save configuration dictionary to the user-specific .neo_config.json.
 
     Args:
         data (Dict[str, Any]): Configuration dictionary to persist.

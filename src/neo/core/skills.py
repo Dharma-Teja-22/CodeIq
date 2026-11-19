@@ -6,8 +6,8 @@ from typing import Optional, Dict, Any, Tuple
 
 class SkillManager:
     """
-    Manages loading, resolving, and executing skills from ~/.codeiq/skills/<skill_name>/SKILL.md
-    and executing them within a sandbox at ~/.codeiq/sandbox, saving outputs to ~/.codeiq/sandbox/Skill_result.
+    Manages loading, resolving, and executing skills from ~/.neo/skills/<skill_name>/SKILL.md
+    and executing them within a sandbox at ~/.neo/sandbox, saving outputs to ~/.neo/sandbox/Skill_result.
     Never pollutes or writes skill outputs directly to the repository root.
     """
 
@@ -19,11 +19,11 @@ class SkillManager:
         results_dir: Optional[Path] = None,
     ):
         self.home_dir = Path.home()
-        self.codeiq_dir = self.home_dir / ".codeiq"
-        self.skills_dir = Path(skills_dir) if skills_dir else (self.codeiq_dir / "skills")
-        self.sandbox_dir = Path(sandbox_dir) if sandbox_dir else (self.codeiq_dir / "sandbox")
+        self.neo_dir = self.home_dir / ".neo"
+        self.skills_dir = Path(skills_dir) if skills_dir else (self.neo_dir / "skills")
+        self.sandbox_dir = Path(sandbox_dir) if sandbox_dir else (self.neo_dir / "sandbox")
         
-        # Store all generated files in ~/.codeiq/sandbox/Skill_result only, never in the main repository
+        # Store all generated files in ~/.neo/sandbox/Skill_result only, never in the main repository
         if results_dir:
             self.results_dir = Path(results_dir)
         else:
@@ -45,7 +45,7 @@ class SkillManager:
         """
         Resolves a skill identifier (name or path) to its SKILL.md file.
         If skill_identifier is a direct path to a file or directory, checks for SKILL.md.
-        Otherwise, looks in ~/.codeiq/skills/<skill_identifier>/SKILL.md.
+        Otherwise, looks in ~/.neo/skills/<skill_identifier>/SKILL.md.
         """
         path_obj = Path(skill_identifier)
         
@@ -67,7 +67,7 @@ class SkillManager:
             clean_name = clean_name.split("(")[0].strip()
         clean_name = clean_name.replace(" ", "_").replace("-", "_")
         
-        # Check ~/.codeiq/skills/<clean_name>/SKILL.md
+        # Check ~/.neo/skills/<clean_name>/SKILL.md
         skill_path = self.skills_dir / clean_name / "SKILL.md"
         try:
             if skill_path.exists():
@@ -112,9 +112,9 @@ class SkillManager:
 
     def execute_skill(self, skill_identifier: str, context: Optional[Dict[Any, Any]] = None) -> Tuple[Path, str]:
         """
-        Locates the skill, prepares the sandbox at ~/.codeiq/sandbox,
+        Locates the skill, prepares the sandbox at ~/.neo/sandbox,
         runs/processes the skill instructions, and saves outputs exclusively 
-        to ~/.codeiq/sandbox/Skill_result.
+        to ~/.neo/sandbox/Skill_result.
         
         Returns:
             Tuple[Path, str]: The results directory path and a clear execution result message.

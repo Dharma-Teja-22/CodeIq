@@ -6,17 +6,17 @@ import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from codeiq_dev.core.llm import _create_chat_completion_with_retry
-from codeiq_dev.core.settings import settings
-from codeiq_dev.core.session import save_session
-from codeiq_dev.tools.registry import tool_schema
-from codeiq_dev.core.cost_metrics import record_cost_metric
+from neo.core.llm import _create_chat_completion_with_retry
+from neo.core.settings import settings
+from neo.core.session import save_session
+from neo.tools.registry import tool_schema
+from neo.core.cost_metrics import record_cost_metric
 
 logger = logging.getLogger(__name__)
 
-TOKEN_THRESHOLD = int(os.getenv("CODEIQ_TOKEN_THRESHOLD", "100000"))
-SUMMARY_MAX_TOKENS = int(os.getenv("CODEIQ_SUMMARY_MAX_TOKENS", "6000"))
-SAFETY_MARGIN = int(os.getenv("CODEIQ_SAFETY_MARGIN", "5000"))
+TOKEN_THRESHOLD = int(os.getenv("NEO_TOKEN_THRESHOLD", "100000"))
+SUMMARY_MAX_TOKENS = int(os.getenv("NEO_SUMMARY_MAX_TOKENS", "6000"))
+SAFETY_MARGIN = int(os.getenv("NEO_SAFETY_MARGIN", "5000"))
 SUMMARY_FLAG = "is_compaction_summary"
 
 

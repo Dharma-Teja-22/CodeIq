@@ -6,7 +6,7 @@ if str(src_path) not in sys.path:
     sys.path.insert(0, str(src_path))
 
 import unittest
-from codeiq_dev.core.skills import SkillManager
+from neo.core.skills import SkillManager
 
 class TestSkillManagerIntegration(unittest.TestCase):
     def setUp(self):

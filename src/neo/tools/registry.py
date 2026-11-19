@@ -1,15 +1,15 @@
-from codeiq_dev.tools.miscellaneous_tools import executeTool
-from codeiq_dev.tools.file_tools import fileOperation
-from codeiq_dev.tools.git_tools import gitOperation
-from codeiq_dev.tools.web_search_tool import DDGSearch, read_url
-from codeiq_dev.core.skills import skill_manager
+from neo.tools.miscellaneous_tools import executeTool
+from neo.tools.file_tools import fileOperation
+from neo.tools.git_tools import gitOperation
+from neo.tools.web_search_tool import DDGSearch, read_url
+from neo.core.skills import skill_manager
 
 from typing import Dict, Any, List, Optional
 
 def run_skill(skill_identifier: str) -> str:
     """
     Locates, loads, and executes the specified skill by name or path within the sandbox environment,
-    saving the resulting outputs into the sandbox Skill_result directory (~/.codeiq/sandbox/Skill_result).
+    saving the resulting outputs into the sandbox Skill_result directory (~/.neo/sandbox/Skill_result).
     """
     try:
         results_dir, message = skill_manager.execute_skill(skill_identifier)
@@ -66,7 +66,7 @@ tool_schema: List[Dict[str, Any]] = [
                 "write_file: Write or create a completely new file when explicitly requested. DO NOT use write_file to duplicate an existing file when fixing errors. "
                 "replace_content: Replace an existing specific block of code in an existing file with corrected or updated code. "
                 "find_file: Search for a file by name. "
-                "Note: For skill-related tasks, all generated files, outputs, and temporary scripts must be stored exclusively inside ~/.codeiq/sandbox/ or ~/.codeiq/sandbox/Skill_result/ and NEVER in the project repository."
+                "Note: For skill-related tasks, all generated files, outputs, and temporary scripts must be stored exclusively inside ~/.neo/sandbox/ or ~/.neo/sandbox/Skill_result/ and NEVER in the project repository."
             ),
             "parameters": {
                 "type": "object",
@@ -78,7 +78,7 @@ tool_schema: List[Dict[str, Any]] = [
                     },
                     "file_path": {
                         "type": "string",
-                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'C:/Users/dlankada/.codeiq/sandbox/script.py').",
+                        "description": "Relative or absolute path to the file (e.g. 'src/app.py' or 'C:/Users/dlankada/.neo/sandbox/script.py').",
                     },
                     "content": {
                         "type": "string",
@@ -102,7 +102,7 @@ tool_schema: List[Dict[str, Any]] = [
         "function": {
             "name": "executeTool",
             "description": (
-                "Execute a single short-running, non-interactive terminal command. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. For skill-related operations (such as npm install, pip install, node script execution, python script execution), pass cwd pointing to ~/.codeiq/sandbox so all installs and operations happen inside the sandbox only and never in the repo. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes."
+                "Execute a single short-running, non-interactive terminal command. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. For skill-related operations (such as npm install, pip install, node script execution, python script execution), pass cwd pointing to ~/.neo/sandbox so all installs and operations happen inside the sandbox only and never in the repo. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes."
             ),
             "parameters": {
                 "type": "object",
@@ -113,7 +113,7 @@ tool_schema: List[Dict[str, Any]] = [
                     },
                     "cwd": {
                         "type": "string",
-                        "description": "Optional working directory in which to execute the command (e.g. 'C:/Users/dlankada/.codeiq/sandbox' for skill operations).",
+                        "description": "Optional working directory in which to execute the command (e.g. 'C:/Users/dlankada/.neo/sandbox' for skill operations).",
                     },
                 },
                 "required": ["command"],
@@ -162,7 +162,7 @@ tool_schema: List[Dict[str, Any]] = [
                 "Execute a specialized skill loaded in the system by name or path. "
                 "Use this tool whenever the user's request matches an available specialized skill (e.g., pdf, docx, pptx, xlsx, frontend-design) "
                 "or when the user explicitly requests to run/apply a skill by name or path. "
-                "The skill executes strictly in the sandbox at ~/.codeiq/sandbox and all final outputs are rendered exclusively into ~/.codeiq/sandbox/Skill_result. "
+                "The skill executes strictly in the sandbox at ~/.neo/sandbox and all final outputs are rendered exclusively into ~/.neo/sandbox/Skill_result. "
                 "Never write or output generated skill files to the main repository. "
                 "IMPORTANT: Invoke this tool only ONCE per user request. Once executed and returned, do NOT call executeSkill again; formulate and present the final answer directly to the user."
             ),

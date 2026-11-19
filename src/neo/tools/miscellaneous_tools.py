@@ -4,8 +4,8 @@ from pathlib import Path
 from typing import Optional
 import typer
 from rich.console import Console
-from codeiq_dev.tools.file_tools import findFile
-from codeiq_dev.core.guardrails import EnvGuardrail
+from neo.tools.file_tools import findFile
+from neo.core.guardrails import EnvGuardrail
 
 console = Console()
 

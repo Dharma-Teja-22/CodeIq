@@ -4,11 +4,10 @@ Verifies that key values from .env (including GEMINI_API_KEY, JINA_API_KEY,
 OPIK_API_KEY, OPIK_PROJECT_NAME, OPIK_WORKSPACE) are properly masked
 and never exposed to LLMs, screen output, or tool outputs.
 """
-import os
 import unittest
 from pathlib import Path
 from dotenv import dotenv_values
-from codeiq_dev.core.guardrails import EnvGuardrail
+from neo.core.guardrails import EnvGuardrail
 
 RAVEN_API_KEY='G5MFJsdfWOIbtHHOWb04XkRv8p6D'
 class TestEnvGuardrailKeys(unittest.TestCase):
@@ -34,7 +33,7 @@ class TestEnvGuardrailKeys(unittest.TestCase):
             "GEMINI_API_KEY": "testkey",
             "JINA_API_KEY": "jinakey",
             "OPIK_API_KEY": "apikey_of_openai",
-            "OPIK_PROJECT_NAME": "CodeIq_devv",
+            "OPIK_PROJECT_NAME": "neov",
             "OPIK_WORKSPACE": "dharmas_workspace",
         }
         for k, v in fallbacks.items():

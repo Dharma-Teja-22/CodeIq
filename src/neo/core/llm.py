@@ -11,10 +11,10 @@ from tenacity import (
     before_log,
     after_log
 )
-from codeiq_dev.core.settings import settings
-from codeiq_dev.tools.registry import tool_schema as tools
-from codeiq_dev.core.cost_metrics import record_cost_metric, record_model_attempt, categorize_error
-from codeiq_dev.core.guardrails import EnvGuardrail
+from neo.core.settings import settings
+from neo.tools.registry import tool_schema as tools
+from neo.core.cost_metrics import record_cost_metric, record_model_attempt, categorize_error
+from neo.core.guardrails import EnvGuardrail
 
 logger = logging.getLogger(__name__)
 

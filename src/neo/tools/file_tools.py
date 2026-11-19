@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import List, Union
-from codeiq_dev.core.guardrails import EnvGuardrail
+from neo.core.guardrails import EnvGuardrail
 
 IGNORE_DIRS = {"node_modules", ".git", "venv", ".env", ".venv", "env", "__pycache__","dist", "build", ".pytest_cache", ".mypy_cache", ".ruff_cache",".turbo", ".next", ".nuxt", ".cache", ".idea", ".vscode", ".vs",".coverage", "htmlcov"}
 IGNORE_EXTS = {".pyc", ".pyo", ".pyd"}

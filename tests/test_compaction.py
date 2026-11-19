@@ -1,7 +1,7 @@
 import asyncio
 from typing import List, Dict, Any
-from codeiq_dev.core import compaction
-from codeiq_dev.core.llm import to_llm_messages
+from neo.core import compaction
+from neo.core.llm import to_llm_messages
 
 
 def _small_messages(count: int) -> List[Dict[str, Any]]:

@@ -11,7 +11,7 @@ except ImportError:
 
 class SkillMap:
     """
-    Scans the skills directory (default: ~/.codeiq/skills) and extracts
+    Scans the skills directory (default: ~/.neo/skills) and extracts
     skill metadata (name, description, file path) from each SKILL.md.
     Provides structured summaries and system prompt integration similar to RepoMap.
     """
@@ -20,7 +20,7 @@ class SkillMap:
         if skills_dir:
             self.skills_dir = Path(skills_dir)
         else:
-            self.skills_dir = Path.home() / ".codeiq" / "skills"
+            self.skills_dir = Path.home() / ".neo" / "skills"
 
     def scan_skills(self) -> List[Dict[str, str]]:
         """

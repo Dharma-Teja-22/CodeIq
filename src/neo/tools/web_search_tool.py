@@ -1,6 +1,6 @@
 from ddgs import DDGS
 import requests
-from codeiq_dev.core.settings import settings
+from neo.core.settings import settings
 import truststore
 truststore.inject_into_ssl()
 

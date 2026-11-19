@@ -1,4 +1,4 @@
-from codeiq_dev.core.config import load_config, DEFAULT_PROVIDER
+from neo.core.config import load_config, DEFAULT_PROVIDER
 import os
 from pathlib import Path
 from dotenv import load_dotenv

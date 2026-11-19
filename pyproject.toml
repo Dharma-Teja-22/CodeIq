@@ -1,13 +1,14 @@
 [project]
-name = "codeiq-dev"
+name = "Neo"
 version = "0.1.0"
-description = "Add your description here"
+description = "A modern AI coding assistant that helps you code faster and better."
 readme = "README.md"
 authors = [
     { name = "Dharma-Teja-22", email = "dharmateja0202@gmail.com" }
 ]
 requires-python = ">=3.10"
 dependencies = [
+    "charset-normalizer>=3.5.2",
     "ddgs>=9.16.1",
     "openai>=3.38.0",
     "python-dotenv>=1.2.4",
@@ -18,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codeiq = "codeiq_dev.cli:app"
+neo = "neo.cli:app"
 
 [build-system]
 requires = ["uv_build>=0.12.15,<0.13.0"]

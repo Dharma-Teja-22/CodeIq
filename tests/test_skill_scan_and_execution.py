@@ -68,11 +68,13 @@ class TestSkillMapAndManager(unittest.TestCase):
         self.assertEqual(resolved.parent.name, "docx")
 
         # Test execution
-        results = manager.execute_skill("docx")
+        results, message = manager.execute_skill("docx")
         self.assertTrue(results.exists())
         summary_file = results / "docx_execution_result.md"
         self.assertTrue(summary_file.exists())
         self.assertIn("Skill Execution Report: docx", summary_file.read_text(encoding="utf-8"))
+        self.assertIn("Skill 'docx' has been successfully loaded", message)
+        self.assertIn("STOP: The skill execution step is COMPLETE", message)
 
 
 if __name__ == "__main__":

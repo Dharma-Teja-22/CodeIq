@@ -1,27 +1,39 @@
 import os
 import shutil
+import re
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 class SkillManager:
     """
     Manages loading, resolving, and executing skills from ~/.codeiq/skills/<skill_name>/SKILL.md
-    and executing them within a sandbox at ~/.codeiq/sandbox, saving outputs to Skill_results in the project root.
+    and executing them within a sandbox at ~/.codeiq/sandbox, saving outputs to ~/.codeiq/sandbox/Skill_result.
+    Never pollutes or writes skill outputs directly to the repository root.
     """
 
-    def __init__(self, project_root: Optional[Path] = None, skills_dir: Optional[Path] = None, sandbox_dir: Optional[Path] = None):
+    def __init__(
+        self,
+        project_root: Optional[Path] = None,
+        skills_dir: Optional[Path] = None,
+        sandbox_dir: Optional[Path] = None,
+        results_dir: Optional[Path] = None,
+    ):
         self.home_dir = Path.home()
         self.codeiq_dir = self.home_dir / ".codeiq"
         self.skills_dir = Path(skills_dir) if skills_dir else (self.codeiq_dir / "skills")
         self.sandbox_dir = Path(sandbox_dir) if sandbox_dir else (self.codeiq_dir / "sandbox")
         
+        # Store all generated files in ~/.codeiq/sandbox/Skill_result only, never in the main repository
+        if results_dir:
+            self.results_dir = Path(results_dir)
+        else:
+            self.results_dir = self.sandbox_dir / "Skill_result"
+
         if project_root:
             self.project_root = Path(project_root)
         else:
             self.project_root = Path.cwd()
-            
-        self.results_dir = self.project_root / "Skill_results"
-        
+
         # Ensure directories exist if accessible
         try:
             self.sandbox_dir.mkdir(parents=True, exist_ok=True)
@@ -98,11 +110,14 @@ class SkillManager:
             f"Searched at: {skill_path} and direct path."
         )
 
-    def execute_skill(self, skill_identifier: str, context: Optional[Dict[Any, Any]] = None) -> Path:
+    def execute_skill(self, skill_identifier: str, context: Optional[Dict[Any, Any]] = None) -> Tuple[Path, str]:
         """
         Locates the skill, prepares the sandbox at ~/.codeiq/sandbox,
-        runs/processes the skill instructions, and copies final outputs 
-        to the project's Skill_results folder.
+        runs/processes the skill instructions, and saves outputs exclusively 
+        to ~/.codeiq/sandbox/Skill_result.
+        
+        Returns:
+            Tuple[Path, str]: The results directory path and a clear execution result message.
         """
         skill_md_path = self.resolve_skill_path(skill_identifier)
         skill_folder = skill_md_path.parent
@@ -131,31 +146,62 @@ class SkillManager:
         files_after = set(p.resolve() for p in self.sandbox_dir.rglob("*") if p.is_file())
         new_files = files_after - files_before
         
-        # If new files or outputs were generated in sandbox, copy them to Skill_results
+        # If new files or outputs were generated in sandbox, copy them to Skill_result
         saved_outputs = []
         for file_path in new_files:
             if file_path.name.lower() == "skill.md":
                 continue
+            # Ignore files already within results_dir
+            try:
+                if self.results_dir in file_path.parents or file_path == self.results_dir:
+                    saved_outputs.append(file_path)
+                    continue
+            except Exception:
+                pass
             rel_path = file_path.relative_to(self.sandbox_dir)
             dest_output = self.results_dir / rel_path
             dest_output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(file_path, dest_output)
             saved_outputs.append(dest_output)
             
-        # If no new files were created, save an execution summary report in Skill_results
+        # Strip YAML frontmatter from instructions to present clean guidelines
+        body_instructions = skill_content
+        fm_match = re.match(r"^---\s*\n.*?\n---\s*\n", skill_content, re.DOTALL)
+        if fm_match:
+            body_instructions = skill_content[fm_match.end():].strip()
+
+        # If no new files were created, save an execution summary report in Skill_result
         if not saved_outputs:
             summary_file = self.results_dir / f"{skill_folder.name}_execution_result.md"
             summary_content = (
                 f"# Skill Execution Report: {skill_folder.name}\n\n"
                 f"- **Skill Path**: {skill_md_path}\n"
                 f"- **Sandbox Used**: {self.sandbox_dir}\n"
+                f"- **Output Location**: {self.results_dir}\n"
                 f"- **Status**: Successfully loaded and executed in sandbox.\n\n"
                 f"## Instructions / Content\n\n{skill_content}\n"
             )
             summary_file.write_text(summary_content, encoding="utf-8")
             saved_outputs.append(summary_file)
             
-        return self.results_dir
+            result_details = (
+                f"Skill '{skill_folder.name}' has been successfully loaded into the sandbox ({self.sandbox_dir}). "
+                f"Saved initial skill reference report to: {summary_file}. "
+                f"Skill instructions summary:\n{body_instructions[:800]}\n\n"
+                "STOP: The skill execution step is COMPLETE. Do NOT invoke executeSkill again for this request. "
+                "Synthesize and present your final response to the user now."
+            )
+        else:
+            output_names = ", ".join(f.name for f in saved_outputs)
+            result_details = (
+                f"Skill '{skill_folder.name}' executed successfully. "
+                f"Output files generated: {output_names}. "
+                f"Destination folder: {self.results_dir}. "
+                "STOP: The skill execution is COMPLETE and final deliverables have been produced in the sandbox Skill_result folder. "
+                "Do NOT call executeSkill or repeat any tool calls. Provide your final response to the user now."
+            )
+            
+        return self.results_dir, result_details
 
 
 skill_manager = SkillManager()

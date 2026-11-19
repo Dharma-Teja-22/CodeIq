@@ -15,7 +15,7 @@ class TestSkillManagerIntegration(unittest.TestCase):
     def test_skill_structure_and_paths(self):
         self.assertTrue(self.manager.sandbox_dir.is_absolute())
         self.assertTrue(self.manager.results_dir.is_absolute())
-        self.assertEqual(self.manager.results_dir.name, "Skill_results")
+        self.assertEqual(self.manager.results_dir.name, "Skill_result")
 
     def test_skill_name_normalization(self):
         clean_name = "xlsx (Excel)"

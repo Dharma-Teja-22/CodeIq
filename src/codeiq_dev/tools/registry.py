@@ -9,11 +9,11 @@ from typing import Dict, Any, List, Optional
 def run_skill(skill_identifier: str) -> str:
     """
     Locates, loads, and executes the specified skill by name or path within the sandbox environment,
-    saving the resulting outputs into the Skill_results directory.
+    saving the resulting outputs into the sandbox Skill_result directory (~/.codeiq/sandbox/Skill_result).
     """
     try:
-        results_dir = skill_manager.execute_skill(skill_identifier)
-        return f"Successfully executed skill '{skill_identifier}'. Output saved to: {results_dir}"
+        results_dir, message = skill_manager.execute_skill(skill_identifier)
+        return message
     except Exception as e:
         return f"Error executing skill '{skill_identifier}': {str(e)}"
 
@@ -66,7 +66,7 @@ tool_schema: List[Dict[str, Any]] = [
                 "write_file: Write or create a completely new file when explicitly requested. DO NOT use write_file to duplicate an existing file when fixing errors. "
                 "replace_content: Replace an existing specific block of code in an existing file with corrected or updated code. "
                 "find_file: Search for a file by name. "
-                "Note: For skill-related tasks, generated files and temporary scripts must be created inside ~/.codeiq/sandbox/."
+                "Note: For skill-related tasks, all generated files, outputs, and temporary scripts must be stored exclusively inside ~/.codeiq/sandbox/ or ~/.codeiq/sandbox/Skill_result/ and NEVER in the project repository."
             ),
             "parameters": {
                 "type": "object",
@@ -102,7 +102,7 @@ tool_schema: List[Dict[str, Any]] = [
         "function": {
             "name": "executeTool",
             "description": (
-                "Execute a single short-running, non-interactive terminal command. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. For skill-related operations (such as npm install, pip install, node script execution, python script execution), pass cwd pointing to ~/.codeiq/sandbox or execute within ~/.codeiq/sandbox so the main repository is not polluted. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes."
+                "Execute a single short-running, non-interactive terminal command. This tool is intended for operations that complete quickly and return a finite output, such as listing files, inspecting project structure, checking Git status, installing specific packages, running unit tests, checking dependency versions, or executing short scripts. For skill-related operations (such as npm install, pip install, node script execution, python script execution), pass cwd pointing to ~/.codeiq/sandbox so all installs and operations happen inside the sandbox only and never in the repo. Before execution, always present the exact generated command to the user and obtain explicit confirmation. Never execute a command without approval. Do not use this tool for continuous, background, interactive, persistent, or long-running processes."
             ),
             "parameters": {
                 "type": "object",
@@ -162,7 +162,9 @@ tool_schema: List[Dict[str, Any]] = [
                 "Execute a specialized skill loaded in the system by name or path. "
                 "Use this tool whenever the user's request matches an available specialized skill (e.g., pdf, docx, pptx, xlsx, frontend-design) "
                 "or when the user explicitly requests to run/apply a skill by name or path. "
-                "The skill executes in the sandbox at ~/.codeiq/sandbox and all final outputs are rendered exclusively into the project's Skill_results directory."
+                "The skill executes strictly in the sandbox at ~/.codeiq/sandbox and all final outputs are rendered exclusively into ~/.codeiq/sandbox/Skill_result. "
+                "Never write or output generated skill files to the main repository. "
+                "IMPORTANT: Invoke this tool only ONCE per user request. Once executed and returned, do NOT call executeSkill again; formulate and present the final answer directly to the user."
             ),
             "parameters": {
                 "type": "object",

@@ -44,6 +44,18 @@ from neo.core.llm import (
 from neo.core.compaction import maybe_compact_session
 from neo.core.cost_metrics import record_cost_metric, load_cost_metrics, METRICS_FILE
 from neo.core.guardrails import EnvGuardrail
+from neo.core.memory import (
+    load_global_memory,
+    load_project_memory,
+    ensure_memory_layout,
+)
+from neo.tools.memory_tools import (
+    updateProjectMemory,
+    saveToGlobalMemory,
+    recallEpisodicMemory,
+    logSuccessfulDebug,
+    saveConcept,
+)
 from neo.core.session import (
     SESSIONS_DIR,
     append_message,
@@ -134,6 +146,68 @@ def select_model_interactive(options: list[str], default_option: str) -> str:
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+def build_full_system_prompt(repo_context_str: str, skills_context_str: str, project_name: Optional[str] = None) -> str:
+    """
+    Assemble the complete system prompt injecting:
+      - Core agent guidelines & tool usage rules
+      - Dynamic project structure & repository info
+      - Specialized skills catalog
+      - Tier 3: Cold Global User Memory (~/.neo/memory/global_memory.md)
+      - Tier 2: Warm Project Working State (~/.neo/memory/projects/{project}.md)
+    """
+    global_mem = load_global_memory()
+    project_mem = load_project_memory(project_name)
+
+    parts = [
+        "You are neo, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
+        "For File Operations and Error Fixing: When the user asks you to run a file and fix/resolve its errors (e.g. 'run test.py file and resolve the issues'): "
+        "1. Always work directly on the target file itself. NEVER create a new or duplicate file (e.g., do NOT create payroll_app.py or test_fixed.py). "
+        "2. Read the file using read_file to inspect its code and understand its formatting. "
+        "3. When you identify bugs or after seeing test/run failures, use replace_content to apply fixes directly to that exact same file in-place, keeping sufficient context in old_code. "
+        "4. After modifying the file, run the target file again using executeTool to verify that all errors are resolved. "
+        "5. Inform the user clearly and politely: explain what errors were found, state that you updated the file in-place, and show that the rerun succeeded. "
+        "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. When the user asks to stage or commit changes while excluding or ignoring a specific file or files (e.g. 'commit except file.txt', 'stage all changes without test.py', 'exclude config.json'), pass the file name(s) in the 'exclude' parameter or stage only the explicit allowed files individually into file_name. NEVER stage or commit any file that the user requested to exclude. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
+        "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
+        "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
+        "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
+        "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
+        f"Here is the project structure and repository info: {repo_context_str}, if there is any folder which might be related to the request, please explore it and provide the response."
+        f"\n\nSpecialized Skills (similar to RepoMap):\n{skills_context_str}\n"
+        "Skill Selection and Execution Guidelines:\n"
+        "1. Dynamic Skill Selection: When the user asks a question or makes a request, automatically evaluate and identify the most relevant skill from the Available Skills above based on their task (e.g. PDF manipulation, Word/docx documents, Excel/xlsx spreadsheets, PowerPoint/pptx presentations, frontend design systems).\n"
+        "2. Manual Skill Specification: Users may also explicitly specify a skill by name (e.g. 'use pdf skill', 'run docx skill') or provide a specific path to a skill. Honor their choice directly.\n"
+        "3. Sandbox Isolation Policy: All operations related to skills — including creating intermediate files, script generation, running package installations (e.g. 'npm install', 'pip install'), and running command executions — MUST be performed strictly inside the sandbox directory (~/.neo/sandbox). NEVER run package installs or create temporary skill scripts directly in the main repository root.\n"
+        "4. Output Delivery: The final deliverable results generated by any skill operation must be saved and stored exclusively in the sandbox skill result folder: '~/.neo/sandbox/Skill_result/'. NEVER store or create generated skill files in the main repository. Summarize the outcome and point the user to the generated outputs in the sandbox Skill_result folder (~/.neo/sandbox/Skill_result/).\n"
+        "5. Skill Execution Workflow: When a skill is invoked via executeSkill, it copies the skill instructions and references into the sandbox and provides guidance on how to perform the task. If the user asked to generate or produce an actual artifact (e.g. a PDF, docx, or xlsx file), executeSkill loads the guidelines into the sandbox. You must then write the generation script into the sandbox (~/.neo/sandbox) using fileOperations, run it using executeTool (with cwd=sandbox), and ensure the script outputs the generated file to '~/.neo/sandbox/Skill_result/'. DO NOT claim a file has been generated unless the generation script has executed with exit code 0 and created the file in that sandbox folder.\n"
+        "6. Single Execution and Loop Prevention Rule: Invoke executeSkill at most ONCE per user turn. Once executeSkill returns its guidelines and setup, do NOT call executeSkill again. Proceed with script generation/execution if needed, or synthesize your final response. Never enter repeated tool call loops.\n"
+        "For Web Research and URL Content Extraction:"
+        "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
+        "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
+        "2. Direct Webpage Reading (fetchWebpageMarkdown): When the user provides a specific URL (or when a webSearch result points to an authoritative documentation/article URL that needs deep reading), invoke fetchWebpageMarkdown to extract its full clean markdown content via Jina AI Reader. "
+        "3. Synthesis & Complete Delivery: Never stop after executing search or URL fetching. Once tool results are returned, immediately synthesize the retrieved facts into a thorough, well-structured, and complete response with headings, bullet points, code snippets (if applicable), and references. Always complete your full explanation without cutting off or leaving the summary incomplete."
+        "**NOTE**: Ensure that all responses are well-structured, clearly defined, and formatted exclusively in Markdown."
+    ]
+
+    # Ingest Tier 3: Global User Memory
+    if global_mem:
+        parts.append(f"\n\n## USER GLOBAL PREFERENCES & HARD CONSTRAINTS (Tier 3 Memory):\n{global_mem}")
+
+    # Ingest Tier 2: Project Working Memory
+    if project_mem:
+        parts.append(f"\n\n## ACTIVE PROJECT WORKING STATE (Tier 2 Memory):\n{project_mem}")
+
+    parts.append(
+        "\n\n## MEMORY INSTRUCTIONS:\n"
+        "- Follow all User Global Preferences and Project Constraints strictly in every response.\n"
+        "- When the user states a new persistent preference or rule, update global memory via saveToGlobalMemory.\n"
+        "- When you make architectural changes, discover dependencies, or add/finish tasks, update project memory via updateProjectMemory.\n"
+        "- When encountering previously solved bugs or complex architecture concepts, use recallEpisodicMemory to retrieve verified solutions.\n"
+        "- After resolving a novel or difficult error, log it via logSuccessfulDebug so it persists across sessions."
+    )
+
+    return "".join(parts)
+
+
 # Async chat implementation
 async def _chat(session_id: Optional[str] = None):
     """Interactive neo chat with Git and File tools using asyncio."""
@@ -162,34 +236,10 @@ async def _chat(session_id: Optional[str] = None):
         repo_context_parts.append(f"Repository URL: {file_repo_url}")
     repo_context_str = " | ".join(repo_context_parts)
 
-    system_prompt = (
-        "You are neo, a polite, helpful AI coding assistant that performs Git operations, File operations, and Command execution. Always choose the correct operation based on the user's request."
-        "For File Operations and Error Fixing: When the user asks you to run a file and fix/resolve its errors (e.g. 'run test.py file and resolve the issues'): "
-        "1. Always work directly on the target file itself. NEVER create a new or duplicate file (e.g., do NOT create payroll_app.py or test_fixed.py). "
-        "2. Read the file using read_file to inspect its code and understand its formatting. "
-        "3. When you identify bugs or after seeing test/run failures, use replace_content to apply fixes directly to that exact same file in-place, keeping sufficient context in old_code. "
-        "4. After modifying the file, run the target file again using executeTool to verify that all errors are resolved. "
-        "5. Inform the user clearly and politely: explain what errors were found, state that you updated the file in-place, and show that the rerun succeeded. "
-        "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. When the user asks to stage or commit changes while excluding or ignoring a specific file or files (e.g. 'commit except file.txt', 'stage all changes without test.py', 'exclude config.json'), pass the file name(s) in the 'exclude' parameter or stage only the explicit allowed files individually into file_name. NEVER stage or commit any file that the user requested to exclude. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
-        "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
-        "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
-        "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
-        "Note: We do have multiple tool calls too. So if you need to perform multiple operations, call the tool for each operation sequentially. After a tool has executed and returned a result, always provide a concise summary or confirmation to the user."
-        f"Here is the project structure and repository info: {repo_context_str}, if there is any folder which might be related to the request, please explore it and provide the response."
-        f"\n\nSpecialized Skills (similar to RepoMap):\n{skills_context_str}\n"
-        "Skill Selection and Execution Guidelines:\n"
-        "1. Dynamic Skill Selection: When the user asks a question or makes a request, automatically evaluate and identify the most relevant skill from the Available Skills above based on their task (e.g. PDF manipulation, Word/docx documents, Excel/xlsx spreadsheets, PowerPoint/pptx presentations, frontend design systems).\n"
-        "2. Manual Skill Specification: Users may also explicitly specify a skill by name (e.g. 'use pdf skill', 'run docx skill') or provide a specific path to a skill. Honor their choice directly.\n"
-        "3. Sandbox Isolation Policy: All operations related to skills — including creating intermediate files, script generation, running package installations (e.g. 'npm install', 'pip install'), and running command executions — MUST be performed strictly inside the sandbox directory (~/.neo/sandbox). NEVER run package installs or create temporary skill scripts directly in the main repository root.\n"
-        "4. Output Delivery: The final deliverable results generated by any skill operation must be saved and stored exclusively in the sandbox skill result folder: '~/.neo/sandbox/Skill_result/'. NEVER store or create generated skill files in the main repository. Summarize the outcome and point the user to the generated outputs in the sandbox Skill_result folder (~/.neo/sandbox/Skill_result/).\n"
-        "5. Skill Execution Workflow: When a skill is invoked via executeSkill, it copies the skill instructions and references into the sandbox and provides guidance on how to perform the task. If the user asked to generate or produce an actual artifact (e.g. a PDF, docx, or xlsx file), executeSkill loads the guidelines into the sandbox. You must then write the generation script into the sandbox (~/.neo/sandbox) using fileOperations, run it using executeTool (with cwd=sandbox), and ensure the script outputs the generated file to '~/.neo/sandbox/Skill_result/'. DO NOT claim a file has been generated unless the generation script has executed with exit code 0 and created the file in that sandbox folder.\n"
-        "6. Single Execution and Loop Prevention Rule: Invoke executeSkill at most ONCE per user turn. Once executeSkill returns its guidelines and setup, do NOT call executeSkill again. Proceed with script generation/execution if needed, or synthesize your final response. Never enter repeated tool call loops.\n"
-        "For Web Research and URL Content Extraction:"
-        "STRICT RULE: Always prioritize the LLM's built-in knowledge and reasoning. Invoke web search tools only when the LLM cannot confidently answer or when external research, up-to-date information, or fact-checking is required. Avoid unnecessary web searches for basic definitions, general knowledge, and programming concepts (e.g., What is Python?, Define ADK,...)."
-        "1. Web Search (webSearch): Use this tool when the user asks to research a topic, library, framework, latest documentation, or find solutions online. Formulate focused search queries. Use the top results to understand the subject or When the user asks to research a topic, use webSearch to retrieve information. Once relevant search results are obtained, synthesize and provide a clear, comprehensive, and complete summary directly to the user in clean Markdown. Do not end your response abruptly or stop mid-sentence."
-        "2. Direct Webpage Reading (fetchWebpageMarkdown): When the user provides a specific URL (or when a webSearch result points to an authoritative documentation/article URL that needs deep reading), invoke fetchWebpageMarkdown to extract its full clean markdown content via Jina AI Reader. "
-        "3. Synthesis & Complete Delivery: Never stop after executing search or URL fetching. Once tool results are returned, immediately synthesize the retrieved facts into a thorough, well-structured, and complete response with headings, bullet points, code snippets (if applicable), and references. Always complete your full explanation without cutting off or leaving the summary incomplete."
-        "**NOTE**: Ensure that all responses are well-structured, clearly defined, and formatted exclusively in Markdown."
+    system_prompt = build_full_system_prompt(
+        repo_context_str=repo_context_str,
+        skills_context_str=skills_context_str,
+        project_name=session.get("project_name"),
     )
 
     # Initialize messages list with system prompt and any resumed session messages
@@ -590,6 +640,46 @@ async def _chat(session_id: Optional[str] = None):
                                 results_dir, result_msg = await asyncio.to_thread(skill_manager.execute_skill, skill_identifier=skill_id)
                                 result = result_msg
                                 console.print(f"[green]Skill '{skill_id}' successfully executed. Final outputs saved in: {results_dir}[/green]")
+                        elif tool_call.function.name == "updateProjectMemory":
+                            sec = arguments.get("section", "")
+                            cont = arguments.get("content", "")
+                            mode = arguments.get("mode", "replace")
+                            console.print(f"[cyan]Updating Project Memory:[/cyan] section='{sec}', mode='{mode}'")
+                            result = await asyncio.to_thread(
+                                updateProjectMemory,
+                                section=sec,
+                                content=cont,
+                                mode=mode,
+                                project_name=session.get("project_name"),
+                            )
+                            console.print(f"[green]{result}[/green]")
+                        elif tool_call.function.name == "saveToGlobalMemory":
+                            info = arguments.get("information", "")
+                            cat = arguments.get("category", "Preference")
+                            console.print(f"[cyan]Saving To Global Memory:[/cyan] category='{cat}'")
+                            result = await asyncio.to_thread(
+                                saveToGlobalMemory,
+                                information=info,
+                                category=cat,
+                            )
+                            console.print(f"[green]{result}[/green]")
+                        elif tool_call.function.name == "recallEpisodicMemory":
+                            query = arguments.get("query", "")
+                            console.print(f"[cyan]Recalling Episodic Memory for:[/cyan] '{query}'")
+                            result = await asyncio.to_thread(recallEpisodicMemory, query=query)
+                            console.print(f"[green]Retrieved episodic context matching '{query}'.[/green]")
+                        elif tool_call.function.name == "logSuccessfulDebug":
+                            err_desc = arguments.get("error_description", "")
+                            sol = arguments.get("solution", "")
+                            console.print(f"[cyan]Logging Verified Debug Solution...[/cyan]")
+                            result = await asyncio.to_thread(logSuccessfulDebug, error_description=err_desc, solution=sol)
+                            console.print(f"[green]{result}[/green]")
+                        elif tool_call.function.name == "saveConcept":
+                            c_name = arguments.get("concept_name", "")
+                            c_exp = arguments.get("explanation", "")
+                            console.print(f"[cyan]Saving Architectural Concept:[/cyan] '{c_name}'")
+                            result = await asyncio.to_thread(saveConcept, concept_name=c_name, explanation=c_exp)
+                            console.print(f"[green]{result}[/green]")
                         else:
                             result = f"Unknown tool: {tool_call.function.name}"
 
@@ -602,6 +692,25 @@ async def _chat(session_id: Optional[str] = None):
                     tool_resp = {"role": "tool", "tool_call_id": tool_call.id, "content": safe_content}
                     messages.append(tool_resp)
                     append_message(session, tool_resp)
+
+                    # Mid-Session Dynamic System Prompt Refresh
+                    # If memory-mutating tools executed, re-read markdown files and update messages[0] in-place
+                    if any(
+                        tc.function.name in ("saveToGlobalMemory", "updateProjectMemory")
+                        for tc in requested_tool_calls
+                        if getattr(tc, "function", None)
+                    ):
+                        try:
+                            system_prompt = build_full_system_prompt(
+                                repo_context_str=repo_context_str,
+                                skills_context_str=skills_context_str,
+                                project_name=session.get("project_name"),
+                            )
+                            if messages and messages[0].get("role") == "system":
+                                messages[0]["content"] = system_prompt
+                                console.print("[dim]🔄 Mid-session memory synchronized into system prompt.[/dim]")
+                        except Exception as refresh_err:
+                            pass
 
                     # Check compaction after tool execution results are appended
                     try:

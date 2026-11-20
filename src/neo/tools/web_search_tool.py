@@ -1,8 +1,18 @@
-from ddgs import DDGS
+try:
+    from ddgs import DDGS
+except ImportError:
+    try:
+        # pyrefly: ignore[missing-import]
+        from duckduckgo_search import DDGS
+    except ImportError:
+        DDGS = None
 import requests
 from neo.core.settings import settings
-import truststore
-truststore.inject_into_ssl()
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception:
+    pass
 
 def DDGSearch(query: str):
     """
@@ -16,6 +26,8 @@ def DDGSearch(query: str):
     """
     if not query:
         return []
+    if DDGS is None:
+        return [{"error": "DuckDuckGo search module is not installed."}]
     try:
         results = DDGS().text(query, max_results=3)
         if not results:

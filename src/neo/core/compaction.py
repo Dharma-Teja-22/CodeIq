@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 from neo.core.llm import _create_chat_completion_with_retry
 from neo.core.settings import settings
-from neo.core.session import save_session
+from neo.core.session import save_session, archive_session_snapshot
 from neo.tools.registry import tool_schema
 from neo.core.cost_metrics import record_cost_metric
 
@@ -39,6 +39,66 @@ def count_text_tokens(text: str) -> int:
     char_estimate = (len(text) + 3) // 4
     word_estimate = len(text.split())
     return max(char_estimate, word_estimate)
+
+
+def prune_message_payload(
+    messages: List[Dict[str, Any]],
+    retention_turns: int = 2,
+    stub_char_threshold: int = 150,
+) -> List[Dict[str, Any]]:
+    """
+    Tier 1 Micro-Compaction:
+    Retains full fidelity for the last `retention_turns` user turns.
+    For messages prior to that horizon:
+      - Large tool outputs exceeding `stub_char_threshold` are stubbed structurally.
+      - Multimodal base64 payloads are replaced with lightweight textual placeholders.
+      - Crucially, role: "tool" and tool_call_id invariants are strictly preserved.
+    """
+    if not messages:
+        return []
+
+    user_turn_indices = [i for i, m in enumerate(messages) if m.get("role") == "user"]
+    if len(user_turn_indices) <= retention_turns:
+        # Within active retention horizon
+        cutoff_idx = 0
+    else:
+        cutoff_idx = user_turn_indices[-retention_turns]
+
+    pruned: List[Dict[str, Any]] = []
+    for idx, msg in enumerate(messages):
+        m = dict(msg)
+        role = m.get("role")
+
+        if idx < cutoff_idx:
+            # Outside retention horizon: apply micro-compaction
+            if role == "tool":
+                content = m.get("content", "")
+                if isinstance(content, str) and len(content) > stub_char_threshold:
+                    if not content.startswith("[Output of "):
+                        tool_name = m.get("name") or "tool"
+                        lines = len(content.splitlines())
+                        chars = len(content)
+                        m["content"] = (
+                            f"[Output of {tool_name} omitted: {lines} lines ({chars} chars). "
+                            "Result previously processed in prior turn.]"
+                        )
+            elif role == "user":
+                content = m.get("content")
+                if isinstance(content, list):
+                    clean_parts = []
+                    for part in content:
+                        if isinstance(part, dict) and part.get("type") == "image_url":
+                            clean_parts.append({
+                                "type": "text",
+                                "text": "[Image attachment previously processed in prior turn]"
+                            })
+                        else:
+                            clean_parts.append(part)
+                    m["content"] = clean_parts
+
+        pruned.append(m)
+
+    return pruned
 
 
 def count_system_prompt_tokens(system_prompt: Optional[str]) -> int:
@@ -281,11 +341,17 @@ async def maybe_compact_session(
     if "compaction" in session:
         session.pop("compaction", None)
 
+    # 1. First execute Micro-Compaction (pruning stale tool outputs beyond retention horizon)
+    # This prevents premature, costly LLM distillations on transient tool payloads.
+    raw_messages: List[Dict[str, Any]] = session.get("messages", [])
+    pruned_messages = prune_message_payload(raw_messages, retention_turns=2, stub_char_threshold=10000)
+    session["messages"] = pruned_messages
+
     # Compute static component token counts
     tool_schema_tokens = count_tool_schemas_tokens(tools)
     file_repo_tokens = count_repo_url_tokens(file_repo_url)
 
-    messages: List[Dict[str, Any]] = session.get("messages", [])
+    messages = session.get("messages", [])
     message_tokens = count_messages_tokens(messages)
 
     # If systemPromptTokens is not already initialized, initialize it with
@@ -307,6 +373,12 @@ async def maybe_compact_session(
     # Check whether token threshold has been reached
     if current_total < TOKEN_THRESHOLD:
         return False
+
+    # Non-destructive pre-compaction archival to Tier 5 (~/.neo/sessions/archive/)
+    try:
+        archive_session_snapshot(session)
+    except Exception as arch_err:
+        logger.warning("Failed to archive pre-compaction session snapshot: %s", arch_err)
 
     # Extract any existing summary and normal conversation messages
     summary_messages = [m for m in messages if is_summary_message(m)]

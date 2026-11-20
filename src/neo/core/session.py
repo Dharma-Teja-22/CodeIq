@@ -1,4 +1,7 @@
+import copy
 import json
+import os
+import tempfile
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -6,11 +9,12 @@ from typing import Any, Dict, List, Optional
 
 # Default session storage path: C:\Users\<username>\.neo\sessions
 SESSIONS_DIR = Path.home() / ".neo" / "sessions"
+ARCHIVE_DIR = SESSIONS_DIR / "archive"
 
 
 def _ensure_sessions_dir() -> Path:
     """
-    Ensure the target sessions directory exists on disk and return its path.
+    Ensure the target sessions directory and archive directory exist on disk and return its path.
 
     Args:
         None
@@ -18,7 +22,11 @@ def _ensure_sessions_dir() -> Path:
     Returns:
         Path: Path object pointing to the initialized sessions directory.
     """
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+        ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
     return SESSIONS_DIR
 
 
@@ -140,7 +148,7 @@ def load_session(session_id: str) -> Dict[str, Any]:
 
 def save_session(session_data: Dict[str, Any]) -> None:
     """
-    Persist session data dictionary to its corresponding JSON file on disk.
+    Persist session data dictionary to its corresponding JSON file on disk atomically.
 
     Args:
         session_data (Dict[str, Any]): Session dictionary containing metadata, messages, and token usage.
@@ -155,10 +163,76 @@ def save_session(session_data: Dict[str, Any]) -> None:
     session_id = session_data.get("session_id", "session_unknown")
     file_path = get_session_file_path(session_id)
     try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(session_data, f, indent=2, ensure_ascii=False)
+        temp_dir = file_path.parent
+        with tempfile.NamedTemporaryFile("w", dir=temp_dir, delete=False, encoding="utf-8") as tf:
+            json.dump(session_data, tf, indent=2, ensure_ascii=False)
+            temp_name = tf.name
+        os.replace(temp_name, file_path)
     except Exception:
-        pass
+        # Fallback to direct write if atomic replacement fails
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(session_data, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+
+def archive_session_snapshot(session_data: Dict[str, Any]) -> Optional[Path]:
+    """
+    Archive an immutable pre-compaction snapshot of the session to ~/.neo/sessions/archive/.
+
+    Args:
+        session_data (Dict[str, Any]): Complete session state before compaction.
+
+    Returns:
+        Optional[Path]: Path to the created archive snapshot file or None.
+    """
+    _ensure_sessions_dir()
+    session_id = session_data.get("session_id", "session_unknown")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    archive_filename = f"{session_id}_{timestamp}.json"
+    archive_path = ARCHIVE_DIR / archive_filename
+    try:
+        temp_dir = ARCHIVE_DIR
+        with tempfile.NamedTemporaryFile("w", dir=temp_dir, delete=False, encoding="utf-8") as tf:
+            json.dump(session_data, tf, indent=2, ensure_ascii=False)
+            temp_name = tf.name
+        os.replace(temp_name, archive_path)
+        return archive_path
+    except Exception:
+        return None
+
+
+def fork_session(parent_session_data: Dict[str, Any], new_title: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Fork an active or existing session into a new branched session.
+    Deep-copies existing session messages up to the current turn with a new session_id
+    and a 'Fork of <title>' prefix.
+
+    Args:
+        parent_session_data (Dict[str, Any]): Parent session dictionary to branch from.
+        new_title (Optional[str]): Optional custom title for the forked session.
+
+    Returns:
+        Dict[str, Any]: Newly initialized forked session.
+    """
+    _ensure_sessions_dir()
+    forked = copy.deepcopy(parent_session_data)
+    project_name = forked.get("project_name") or get_project_name()
+    short_uuid = uuid.uuid4().hex[:8]
+    forked["session_id"] = f"{project_name}-fork-{short_uuid}"
+
+    orig_title = forked.get("title") or "Session"
+    forked["title"] = new_title or f"Fork of {orig_title}"
+    now_iso = datetime.now().isoformat()
+    forked["created_at"] = now_iso
+    forked["updated_at"] = now_iso
+    forked["status"] = "active"
+    forked["is_deleted"] = False
+    forked["deleted_at"] = None
+
+    save_session(forked)
+    return forked
 
 
 def append_message(session_data: Dict[str, Any], message: Dict[str, Any]) -> None:

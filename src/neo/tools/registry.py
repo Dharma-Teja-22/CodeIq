@@ -3,6 +3,13 @@ from neo.tools.file_tools import fileOperation
 from neo.tools.git_tools import gitOperation
 from neo.tools.web_search_tool import DDGSearch, read_url
 from neo.core.skills import skill_manager
+from neo.tools.memory_tools import (
+    updateProjectMemory,
+    saveToGlobalMemory,
+    recallEpisodicMemory,
+    logSuccessfulDebug,
+    saveConcept,
+)
 
 from typing import Dict, Any, List, Optional
 
@@ -185,6 +192,122 @@ tool_schema: List[Dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "updateProjectMemory",
+            "description": (
+                "Atomically update a section in the active project's working memory (~/.neo/memory/projects/{project}.md). "
+                "Canonical sections: 'Tech Stack & Runtime', 'Active Architecture & Key Modules', 'Critical Constraints, Preferences', 'Current/Ongoing Tasks'. "
+                "Mode can be 'replace' (recommended for Current/Ongoing Tasks) or 'append' (to add bullet items)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "section": {
+                        "type": "string",
+                        "description": "The target section name (e.g. 'Tech Stack & Runtime', 'Active Architecture & Key Modules', 'Critical Constraints, Preferences', 'Current/Ongoing Tasks').",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "Markdown content/bullets to update into the section.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["replace", "append"],
+                        "description": "Update mode: 'replace' to overwrite section body, or 'append' to add lines.",
+                    },
+                },
+                "required": ["section", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "saveToGlobalMemory",
+            "description": (
+                "Save cross-project user facts, environment info, or persistent preferences to ~/.neo/memory/global_memory.md. "
+                "Automatically handles deduplication and overwrites/supersedes conflicting preferences (e.g. updating formatting rules)."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "information": {
+                        "type": "string",
+                        "description": "The preference, rule, constraint, or fact to store.",
+                    },
+                    "category": {
+                        "type": "string",
+                        "description": "Category label (e.g. 'Preference', 'Environment', 'Constraint'). Defaults to 'Preference'.",
+                    },
+                },
+                "required": ["information"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "recallEpisodicMemory",
+            "description": (
+                "Search past bug solutions, verified fixes, and codebase architectural concepts using pure-Python Okapi BM25 ranking engine (< 2ms). "
+                "Call this whenever answering questions about previously resolved errors, concepts, or past debugging history."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Keywords or natural language search query for the issue or concept to retrieve.",
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "logSuccessfulDebug",
+            "description": "Log a verified bug fix and solution into episodic debug history (~/.neo/memory/debug_history.md).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "error_description": {
+                        "type": "string",
+                        "description": "Clear description of the error or failure encountered.",
+                    },
+                    "solution": {
+                        "type": "string",
+                        "description": "The exact solution, steps, or code adjustments that successfully resolved the issue.",
+                    },
+                },
+                "required": ["error_description", "solution"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "saveConcept",
+            "description": "Save an architectural pattern or deep conceptual doc into episodic concepts (~/.neo/memory/concepts/{concept_name}.md).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "concept_name": {
+                        "type": "string",
+                        "description": "Short identifier/name of the concept (e.g. 'caching_strategy', 'auth_pipeline').",
+                    },
+                    "explanation": {
+                        "type": "string",
+                        "description": "Detailed architectural explanation and design notes.",
+                    },
+                },
+                "required": ["concept_name", "explanation"],
+            },
+        },
+    },
 ]
 
 # Tools
@@ -195,4 +318,9 @@ tools = {
     "webSearch": DDGSearch,
     "fetchWebpageMarkdown": read_url,
     "executeSkill": run_skill,
+    "updateProjectMemory": updateProjectMemory,
+    "saveToGlobalMemory": saveToGlobalMemory,
+    "recallEpisodicMemory": recallEpisodicMemory,
+    "logSuccessfulDebug": logSuccessfulDebug,
+    "saveConcept": saveConcept,
 }

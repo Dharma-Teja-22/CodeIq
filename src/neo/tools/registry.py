@@ -44,7 +44,14 @@ tool_schema: List[Dict[str, Any]] = [
                         "type": "string",
                         "description": (
                             "File or directory to stage. "
-                            "Use '.' for all changes."
+                            "Use '.' for all changes, or specify individual file names."
+                        ),
+                    },
+                    "exclude": {
+                        "type": "string",
+                        "description": (
+                            "File, files (comma or space separated), or pattern to exclude from staging or committing. "
+                            "Use this whenever the user asks to commit or stage changes while excluding specific files (e.g. 'exclude file.py', 'except test.txt')."
                         ),
                     },
                     "commit_message": {

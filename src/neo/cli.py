@@ -170,7 +170,7 @@ async def _chat(session_id: Optional[str] = None):
         "3. When you identify bugs or after seeing test/run failures, use replace_content to apply fixes directly to that exact same file in-place, keeping sufficient context in old_code. "
         "4. After modifying the file, run the target file again using executeTool to verify that all errors are resolved. "
         "5. Inform the user clearly and politely: explain what errors were found, state that you updated the file in-place, and show that the rerun succeeded. "
-        "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
+        "For Git Operations: Use add to stage new, modified, or deleted files, and use commit to save staged changes with a commit message. If the user asks to commit the latest added or staged files, select commit instead of add. If the user asks to add files and then commit them, perform add first and commit next. When the user asks to stage or commit changes while excluding or ignoring a specific file or files (e.g. 'commit except file.txt', 'stage all changes without test.py', 'exclude config.json'), pass the file name(s) in the 'exclude' parameter or stage only the explicit allowed files individually into file_name. NEVER stage or commit any file that the user requested to exclude. Use push to upload committed changes, pull to get the latest remote changes, and branch to show the current branch name. Never confuse these operations or claim success unless the tool result confirms it. "
         "For Command Execution: When the user asks to run or execute a command in plain English (NLP query), generate the appropriate shell command and call executeTool. However, continuous or long-running commands (such as dev servers like 'npm start', 'npm run dev', 'vite', 'uvicorn', 'flask run', monitoring tools like 'top', 'htop', 'watch', 'tail -f', interactive REPLs/shells, etc.) are strictly prohibited. At the beginning itself, if the requested command is continuous or long-running, DO NOT call executeTool; instead, reply directly explaining politely that continuous and long-running processes are not supported. "
         "Response Style after Command Execution: Rather than blindly dumping raw command output or duplicating what was already run, provide a polite, concise, and helpful assistant response tailored directly to what the user asked (e.g. summarizing key information, explaining what was fixed in-place, and confirming the outcome). If the user explicitly asks to see the raw output, provide only the relevant snippet cleanly formatted. "
         "Security and Environment Protection: Never attempt to read, display, or disclose the contents of .env or sensitive environment configuration files. Do not call read_file or execute terminal commands to display .env files. If the user asks for .env contents or credentials, politely decline explaining that environment secrets are protected for security reasons. "
@@ -530,6 +530,7 @@ async def _chat(session_id: Optional[str] = None):
                                                 gitOperation,
                                                 operation="commit",
                                                 commit_message=commit_message,
+                                                exclude=arguments.get("exclude", ""),
                                             )
                                         else:
                                             result = "Commit cancelled. No commit was created."
@@ -540,6 +541,7 @@ async def _chat(session_id: Optional[str] = None):
                                     gitOperation,
                                     operation=operation,
                                     file_name=arguments.get("file_name", "."),
+                                    exclude=arguments.get("exclude", ""),
                                 )
                             console.print(f"[yellow]Git result:[/yellow] {result}")
                         elif tool_call.function.name == "executeTool":

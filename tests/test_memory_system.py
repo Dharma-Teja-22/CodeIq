@@ -36,27 +36,83 @@ def test_micro_compaction_pruning():
     assert pruned[5]["content"] == "B" * 300  # Within retention horizon: untouched
 
 
-def test_global_memory_deduplication_and_superseding():
-    res1 = save_to_memory("Use strictly TypeScript for all backend code", "Preference")
-    assert "Saved new" in res1 or "Memory already contains" in res1
+def test_global_memory_deduplication_and_superseding(tmp_path, monkeypatch):
+    test_dir = tmp_path / ".neo"
+    monkeypatch.setattr("neo.core.memory.NEO_HOME", test_dir)
+    monkeypatch.setattr("neo.core.memory.MEMORY_DIR", test_dir / "memory")
+    monkeypatch.setattr("neo.core.memory.PROJECTS_MEMORY_DIR", test_dir / "memory" / "projects")
+    monkeypatch.setattr("neo.core.memory.CONCEPTS_DIR", test_dir / "memory" / "concepts")
+    monkeypatch.setattr("neo.core.memory.GLOBAL_MEMORY_FILE", test_dir / "memory" / "global_memory.md")
+    monkeypatch.setattr("neo.core.memory.DEBUG_HISTORY_FILE", test_dir / "memory" / "debug_history.md")
 
-    # Exact duplicate rejected
-    res2 = save_to_memory("Use strictly TypeScript for all backend code", "Preference")
-    assert "already contains" in res2
+    # 1. Emoji preference superseding
+    res1 = save_to_memory("Use emojis", "Preference")
+    assert "Saved new" in res1
+    mem = load_global_memory()
+    assert "-Preference: Use emojis" in mem
 
-    # Topic overwrite test
-    res3 = save_to_memory("Use strictly Python and FastAPI for all backend code", "Preference")
-    assert "Updated and superseded" in res3 or "Saved new" in res3
+    # Duplicate rejection
+    res1_dup = save_to_memory("Use emojis", "Preference")
+    assert "already contains" in res1_dup
+
+    # Contradiction: 'Never use emojis from now on' should overwrite 'Use emojis'
+    res2 = save_to_memory("I don't want to use emojis. Never use emojis from now on.", "Preference")
+    assert "Updated and superseded" in res2
+    mem2 = load_global_memory()
+    assert "Never use emojis from now on" in mem2
+    assert "Use emojis" not in mem2 or "Never use emojis" in mem2
+    # Ensure no duplicate lines
+    lines = [l for l in mem2.splitlines() if "emoji" in l.lower()]
+    assert len(lines) == 1
+    assert "never use emojis" in lines[0].lower()
+
+    # 2. Antonym / format opposition: Tabs vs Spaces
+    save_to_memory("Always use tabs for indentation", "Preference")
+    save_to_memory("Never use tabs, use 2 spaces for indentation", "Preference")
+    mem3 = load_global_memory()
+    lines_indent = [l for l in mem3.splitlines() if "indent" in l.lower() or "tab" in l.lower() or "space" in l.lower()]
+    assert len(lines_indent) == 1
+    assert "2 spaces" in lines_indent[0]
+
+    # 3. Light mode vs Dark mode
+    save_to_memory("Prefer dark mode", "Preference")
+    save_to_memory("Switch to light mode", "Preference")
+    mem4 = load_global_memory()
+    lines_mode = [l for l in mem4.splitlines() if "mode" in l.lower()]
+    assert len(lines_mode) == 1
+    assert "light mode" in lines_mode[0]
 
 
-def test_project_memory_canonical_schema():
+def test_project_memory_deduplication_and_superseding(tmp_path, monkeypatch):
+    test_dir = tmp_path / ".neo"
+    monkeypatch.setattr("neo.core.memory.NEO_HOME", test_dir)
+    monkeypatch.setattr("neo.core.memory.MEMORY_DIR", test_dir / "memory")
+    monkeypatch.setattr("neo.core.memory.PROJECTS_MEMORY_DIR", test_dir / "memory" / "projects")
+
+    # In append mode, conflicting items should supersede existing items instead of accumulating duplicates
+    update_project_memory("Critical Constraints, Preferences", "- Use emojis in git commit messages", mode="append", project_name="myproj")
+    update_project_memory("Critical Constraints, Preferences", "- Never use emojis in commit messages, keep plain text", mode="append", project_name="myproj")
+
+    loaded = load_project_memory("myproj")
+    lines = [l for l in loaded.splitlines() if "emoji" in l.lower()]
+    assert len(lines) == 1
+    assert "Never use emojis" in lines[0]
+
+
+def test_project_memory_canonical_schema(tmp_path, monkeypatch):
+    test_dir = tmp_path / ".neo"
+    monkeypatch.setattr("neo.core.memory.NEO_HOME", test_dir)
+    monkeypatch.setattr("neo.core.memory.MEMORY_DIR", test_dir / "memory")
+    monkeypatch.setattr("neo.core.memory.PROJECTS_MEMORY_DIR", test_dir / "memory" / "projects")
+
     res = update_project_memory(
         section="Tech Stack & Runtime",
         content="- Python 3.12\n- FastAPI",
-        mode="replace"
+        mode="replace",
+        project_name="myproj"
     )
     assert "Successfully updated" in res
-    loaded = load_project_memory()
+    loaded = load_project_memory("myproj")
     assert "## Tech Stack & Runtime" in loaded
     assert "FastAPI" in loaded
     assert "## Active Architecture & Key Modules" in loaded

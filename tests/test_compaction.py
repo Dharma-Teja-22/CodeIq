@@ -14,11 +14,12 @@ def _small_messages(count: int) -> List[Dict[str, Any]]:
     ]
 
 
-def test_find_split_index_does_not_orphan_tool_messages():
+def test_prune_message_payload_does_not_orphan_tool_messages():
     tool_message = {
         "role": "tool",
         "tool_call_id": "call-1",
-        "content": "done",
+        "name": "testTool",
+        "content": "A" * 300,
     }
     messages = [
         {"role": "user", "content": "run the tool"},
@@ -34,17 +35,18 @@ def test_find_split_index_does_not_orphan_tool_messages():
             ],
         },
         tool_message,
-    ] + _small_messages(compaction.MIN_RECENT_MESSAGES)
+        {"role": "user", "content": "turn 2"},
+        {"role": "assistant", "content": "reply 2"},
+        {"role": "user", "content": "turn 3"},
+        {"role": "assistant", "content": "reply 3"},
+    ]
 
-    recent_budget = compaction.count_message_tokens(tool_message) + sum(
-        compaction.count_message_tokens(m)
-        for m in _small_messages(compaction.MIN_RECENT_MESSAGES)
-    )
-
-    split = compaction.find_split_index(messages, recent_budget)
-
-    assert split == 1
-    assert messages[split].get("role") != "tool"
+    pruned = compaction.prune_message_payload(messages, retention_turns=2, stub_char_threshold=150)
+    assert len(pruned) == len(messages)
+    # Outside retention horizon: tool message is stubbed but role and tool_call_id are intact
+    assert "[Output of testTool omitted:" in pruned[2]["content"]
+    assert pruned[2]["tool_call_id"] == "call-1"
+    assert pruned[2]["role"] == "tool"
 
 
 def test_to_llm_messages_removes_internal_metadata():
@@ -94,14 +96,11 @@ def test_compaction_replaces_older_messages_and_prevents_repeat(monkeypatch):
     assert compaction.is_summary_message(session["messages"][0])
     assert "Conversation summary so far:" in session["messages"][0]["content"]
     assert compaction.count_messages_tokens(session["messages"]) < compaction.TOKEN_THRESHOLD
-    assert session["compaction"]["compaction_count"] == 1
-    assert session["compaction"]["compacted_message_count"] == 2
-    assert session["compaction"]["context_tokens"] < compaction.TOKEN_THRESHOLD
+    assert "compaction" not in session
 
     unchanged = asyncio.run(compaction.maybe_compact_session(session))
 
     assert unchanged is False
-    assert session["compaction"]["compaction_count"] == 1
     assert len([m for m in session["messages"] if compaction.is_summary_message(m)]) == 1
 
 

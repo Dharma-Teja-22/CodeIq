@@ -1,4 +1,5 @@
 import pytest
+import tenacity
 from unittest.mock import AsyncMock, patch, MagicMock
 from neo.core.llm import _is_rate_limit_or_resource_exhausted, _create_chat_completion_with_retry
 
@@ -24,9 +25,10 @@ async def test_retry_on_resource_exhausted_success():
     )
 
     with patch("neo.core.llm.client.chat.completions.create", mock_client_create):
-        result = await _create_chat_completion_with_retry({"model": "test-model", "messages": []})
-        assert result.choices[0].message.content == "Success after retries"
-        assert mock_client_create.call_count == 3
+        with patch.object(_create_chat_completion_with_retry.retry, "wait", tenacity.wait_none()):
+            result = await _create_chat_completion_with_retry({"model": "test-model", "messages": []})
+            assert result.choices[0].message.content == "Success after retries"
+            assert mock_client_create.call_count == 3
 
 
 @pytest.mark.anyio
@@ -36,7 +38,8 @@ async def test_retry_exhausted_raises_error():
     )
 
     with patch("neo.core.llm.client.chat.completions.create", mock_client_create):
-        with pytest.raises(Exception, match="429 Resource exhausted"):
-            await _create_chat_completion_with_retry({"model": "test-model", "messages": []})
-        
-        assert mock_client_create.call_count == 5
+        with patch.object(_create_chat_completion_with_retry.retry, "wait", tenacity.wait_none()):
+            with pytest.raises(Exception, match="429 Resource exhausted"):
+                await _create_chat_completion_with_retry({"model": "test-model", "messages": []})
+            
+            assert mock_client_create.call_count == 5

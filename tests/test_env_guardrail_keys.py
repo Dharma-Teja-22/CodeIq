@@ -21,20 +21,23 @@ class TestEnvGuardrailKeys(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        # Pick all values from the project root .env file if it exists,
+        # Pick all values from src/neo/.env or the project root .env file if it exists,
         # otherwise provide realistic test sample values
-        env_path = Path(__file__).resolve().parent.parent / ".env"
+        env_path = Path(__file__).resolve().parent.parent / "src" / "neo" / ".env"
+        if not env_path.exists():
+            env_path = Path(__file__).resolve().parent.parent / ".env"
+
         cls.env_values = {}
         if env_path.exists():
             cls.env_values = {k: v for k, v in dotenv_values(env_path).items() if v}
 
         # Fallback values for running in environments where .env might be missing
         fallbacks = {
-            "GEMINI_API_KEY": "testkey",
-            "JINA_API_KEY": "jinakey",
-            "OPIK_API_KEY": "apikey_of_openai",
-            "OPIK_PROJECT_NAME": "neov",
-            "OPIK_WORKSPACE": "dharmas_workspace",
+            "GEMINI_API_KEY": "AIzaSyBzLyOTD7v71FZhwrUFFlBJg6G-b17G-EQ",
+            "JINA_API_KEY": "jina_7f5e1a12a85a4e32bafccbabd7912f1b17DsXqKh6OvCfSI0NYlP1c3eXPsl",
+            "OPIK_API_KEY": "G5MFJWOIbtHHOWb04XkRv8p6D",
+            "OPIK_PROJECT_NAME": "CodeIq_Opik",
+            "OPIK_WORKSPACE": "dharma",
         }
         for k, v in fallbacks.items():
             if k not in cls.env_values or not cls.env_values[k]:

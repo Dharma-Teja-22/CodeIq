@@ -13,7 +13,13 @@ from neo.core.memory import (
     BM25Retriever,
 )
 from neo.core.compaction import prune_message_payload
-from neo.core.session import create_session, fork_session, archive_session_snapshot
+from neo.core.session import (
+    create_session,
+    fork_session,
+    archive_session_snapshot,
+    slugify_session_title,
+    update_session_title,
+)
 
 
 def test_micro_compaction_pruning():
@@ -130,6 +136,19 @@ def test_bm25_episodic_retrieval():
 
     result = recall_memory("Redis Cluster ConnectionTimeout")
     assert "ConnectionTimeout" in result or "redis_cluster_config" in result
+
+
+def test_slugify_session_title_no_spaces():
+    assert slugify_session_title("Helllo Can You Check") == "Helllo_Can_You_Check"
+    assert " " not in slugify_session_title("Helllo Can You Check")
+    assert slugify_session_title("Fix bug in /auth: token invalid!") == "Fix_bug_in_auth_token_invalid"
+    assert slugify_session_title("   multiple   spaces   and---hyphens   ") == "multiple_spaces_and-hyphens"
+    assert slugify_session_title("") == "Session"
+
+    session = create_session(save=False)
+    new_id = update_session_title(session, "Helllo Can You Check")
+    assert " " not in new_id
+    assert "Helllo_Can_You_Check" in new_id
 
 
 def test_session_forking_and_snapshot():

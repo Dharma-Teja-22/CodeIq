@@ -15,7 +15,7 @@ from neo.core.settings import settings
 from neo.tools.registry import tool_schema as tools
 from neo.core.cost_metrics import record_cost_metric, record_model_attempt, categorize_error
 from neo.core.guardrails import EnvGuardrail
-
+import re
 logger = logging.getLogger(__name__)
 
 # Initialize the shared AsyncOpenAI client
@@ -386,10 +386,13 @@ async def generate_session_title(user_prompt: str, model: Optional[str] = None) 
             except Exception:
                 pass
         title = (response.choices[0].message.content or "").strip().strip('"').strip("'").strip("`")
-        # Sanitize for safe filenames (remove illegal characters: \ / : * ? " < > |)
-        sanitized = "".join(c for c in title if c.isalnum() or c in (" ", "-", "_")).strip()
-        return sanitized or "New Session"
+        # Sanitize for safe, space-free filenames
+        sanitized = re.sub(r"[^\w\-]+", "_", title.strip())
+        sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+        return sanitized or "New_Session"
     except Exception:
         # Fallback to truncated first words if AI call fails
         words = user_prompt.strip().split()
-        return " ".join(words[:4]).title() or "New Session"
+        fallback = "_".join(words[:4]).title()
+        fallback = re.sub(r"[^\w\-]+", "_", fallback).strip("_")
+        return fallback or "New_Session"

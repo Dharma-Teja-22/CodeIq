@@ -69,6 +69,7 @@ from neo.core.session import (
     restore_session,
     save_session,
     set_model,
+    slugify_session_title,
     soft_delete_session,
     update_session_title,
     update_tokens,
@@ -282,9 +283,7 @@ async def _chat(session_id: Optional[str] = None):
                 # console.print(f"[dim]Session Title: {ai_title} | ID: {new_session_id}[/dim]")
             except Exception:
                 ai_title="New Session"
-            clean_title = "".join(c for c in ai_title if c.isalnum() or c in (" ", "-", "_")).strip()
-            if not clean_title:
-                clean_title='session'
+            clean_title = slugify_session_title(ai_title)
             project_name = session.get("project_name")
             session["title"] = ai_title
             session["session_id"] = f"{project_name}-{clean_title}"

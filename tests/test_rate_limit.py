@@ -1,3 +1,4 @@
+# pyrefly: ignore[missing-import]
 import pytest
 import tenacity
 from unittest.mock import AsyncMock, patch, MagicMock

@@ -33,9 +33,9 @@ class TestEnvGuardrailKeys(unittest.TestCase):
 
         # Fallback values for running in environments where .env might be missing
         fallbacks = {
-            "GEMINI_API_KEY": "AIzaSyBzLyOTD7v71FZhwrUFFlBJg6G-b17G-EQ",
-            "JINA_API_KEY": "jina_7f5e1a12a85a4e32bafccbabd7912f1b17DsXqKh6OvCfSI0NYlP1c3eXPsl",
-            "OPIK_API_KEY": "G5MFJWOIbtHHOWb04XkRv8p6D",
+            "GEMINI_API_KEY": "test-gemini-b17G-EQ",
+            "JINA_API_KEY": "jina_7f5e1a12a85a4e32bafcapikey-fSI0NYlP1c3eXPsl",
+            "OPIK_API_KEY": "test_opik_key",
             "OPIK_PROJECT_NAME": "CodeIq_Opik",
             "OPIK_WORKSPACE": "dharma",
         }
@@ -85,7 +85,9 @@ class TestEnvGuardrailKeys(unittest.TestCase):
 
     def test_safe_read_file_masks_all_keys(self):
         """Verify safe_read_file returns only masked schema values for .env and leaves zero secrets exposed."""
-        env_path = Path(__file__).resolve().parent.parent / ".env"
+        env_path = Path(__file__).resolve().parent.parent / "src" / "neo" / ".env"
+        if not env_path.exists():
+            env_path = Path(__file__).resolve().parent.parent / ".env"
         if not env_path.exists():
             self.skipTest(".env file not present on disk, skipping file read test.")
 

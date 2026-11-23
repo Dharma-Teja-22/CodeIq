@@ -1,3 +1,4 @@
+# pyrefly: ignore[missing-import]
 import pytest
 from unittest.mock import AsyncMock, patch
 from neo.core.llm import stream_chat_turn, AssistantMessage, _create_chat_completion_with_retry

@@ -37,6 +37,28 @@ STOPWORDS = frozenset({
     "while", "who", "whom", "why", "will", "with", "you", "your", "yours", "yourself", "yourselves"
 })
 
+# Generic instructional / auxiliary terms that do not define the specific topic or entity
+GENERIC_ACTION_WORDS = frozenset({
+    "use", "using", "uses", "prefer", "preference", "preferring", "preferred", "switch",
+    "set", "setting", "enable", "disable", "enabling", "disabling", "never", "always",
+    "want", "wants", "wanted", "like", "need", "needs", "must", "should", "from",
+    "now", "make", "ensure", "keep", "avoid", "avoiding", "stop", "stopping", "strictly",
+    "please", "give", "provide", "output", "format", "write", "writing", "code"
+})
+
+# Antonym / polar opposition clusters: items in the same tuple are mutually exclusive opposites
+ANTONYM_CLUSTERS = [
+    frozenset({"light", "dark"}),
+    frozenset({"tabs", "spaces"}),
+    frozenset({"tab", "space"}),
+    frozenset({"json", "yaml", "xml", "toml"}),
+    frozenset({"snake_case", "camelcase", "pascalcase", "kebab_case"}),
+    frozenset({"typescript", "javascript"}),
+    frozenset({"sync", "async"}),
+    frozenset({"single", "double"}),
+    frozenset({"verbose", "concise", "brief", "minimal"}),
+]
+
 
 def ensure_memory_layout() -> None:
     """Ensure all expected storage directories exist on disk."""
@@ -84,17 +106,85 @@ def load_global_memory() -> str:
 
 
 def _extract_semantic_keywords(text: str) -> set:
-    """Extract lowercased alphanumeric keywords excluding stopwords."""
+    """
+    Extract lowercased alphanumeric keywords excluding stopwords.
+    Normalizes trailing 's' / 'es' / 'ies' for basic plural handling.
+    """
     words = re.findall(r"[a-z0-9_]+", text.lower())
-    return {w for w in words if w not in STOPWORDS and len(w) > 2}
+    result = set()
+    for w in words:
+        if w in STOPWORDS or len(w) <= 2:
+            continue
+        result.add(w)
+        # Normalize simple plurals
+        if w.endswith("ies") and len(w) > 4:
+            result.add(w[:-3] + "y")
+        elif w.endswith("es") and len(w) > 3:
+            result.add(w[:-2])
+        elif w.endswith("s") and not w.endswith("ss") and len(w) > 3:
+            result.add(w[:-1])
+    return result
+
+
+def _extract_topic_core(text: str) -> set:
+    """
+    Extract high-salience topic nouns/entities, excluding generic instruction verbs
+    like 'use', 'prefer', 'enable', 'always', 'never'.
+    """
+    keywords = _extract_semantic_keywords(text)
+    core = {w for w in keywords if w not in GENERIC_ACTION_WORDS}
+    return core or keywords
+
+
+def is_conflicting_or_same_topic(text_a: str, text_b: str) -> bool:
+    """
+    Determine if text_a and text_b address the same underlying preference, rule,
+    or entity, indicating that the newer one supersedes/replaces the previous one.
+    """
+    norm_a = text_a.strip().lower()
+    norm_b = text_b.strip().lower()
+
+    if norm_a == norm_b:
+        return True
+
+    # Check antonym / opposite polarity clusters
+    words_a = set(re.findall(r"[a-z0-9_]+", norm_a))
+    words_b = set(re.findall(r"[a-z0-9_]+", norm_b))
+    for cluster in ANTONYM_CLUSTERS:
+        has_a = bool(words_a.intersection(cluster))
+        has_b = bool(words_b.intersection(cluster))
+        if has_a and has_b:
+            # Both statements refer to concepts from the same opposing cluster (e.g. tabs vs spaces, light vs dark)
+            return True
+
+    core_a = _extract_topic_core(norm_a)
+    core_b = _extract_topic_core(norm_b)
+
+    common_core = core_a.intersection(core_b)
+    if common_core:
+        # If there is shared non-generic topic/entity vocabulary
+        min_core_len = min(len(core_a), len(core_b))
+        if min_core_len <= 2:
+            return True
+        if len(common_core) >= min_core_len * 0.5:
+            return True
+
+    # Fallback to broader semantic keywords
+    all_k_a = _extract_semantic_keywords(norm_a)
+    all_k_b = _extract_semantic_keywords(norm_b)
+    common_all = all_k_a.intersection(all_k_b)
+    if common_all and len(common_all) >= max(1, min(len(all_k_a), len(all_k_b)) * 0.6):
+        return True
+
+    return False
 
 
 def save_to_memory(information: str, category: str = "preference") -> str:
     """
     Save user facts, instructions, or hard constraints to Tier 3 global memory.
     Implements intelligent deduplication and smart preference overwriting:
-    e.g. Setting 'do not provide emojis' and later 'provide emojis' will supersede/overwrite
-    the conflicting entry instead of duplicating.
+    e.g. Setting 'Use emojis' and later 'Never use emojis from now on' will supersede/overwrite
+    the conflicting entry instead of duplicating. Latest stated preference always takes priority.
     """
     ensure_memory_layout()
     clean_info = " ".join(information.strip().lstrip("-").strip().split())
@@ -120,10 +210,8 @@ def save_to_memory(information: str, category: str = "preference") -> str:
             return f"Memory already contains this exact information under {clean_category}."
 
     # Conflict / Overwrite Detection:
-    # If the new statement shares primary topic keywords (e.g. 'emoji', 'emojis')
-    # with an existing preference in the same category or overall preferences,
-    # supersede/overwrite that line.
-    new_keywords = _extract_semantic_keywords(clean_info)
+    # If the new statement shares primary topic keywords or addresses the same subject
+    # with an existing preference, supersede/overwrite that line.
     overwritten = False
     new_lines: List[str] = []
     new_entry = f"-{clean_category}: {clean_info}"
@@ -137,17 +225,16 @@ def save_to_memory(information: str, category: str = "preference") -> str:
             cat = cat.strip()
             val = val.strip()
 
-        line_keywords = _extract_semantic_keywords(val)
-        # If substantial keyword overlap (>60% of significant content terms) or same topic entity
-        common = new_keywords.intersection(line_keywords)
-        is_same_topic = False
-        if common and (len(common) >= max(1, min(len(new_keywords), len(line_keywords)) * 0.6)):
-            is_same_topic = True
+        is_same = is_conflicting_or_same_topic(clean_info, val)
+        is_compat_category = (not cat or cat.lower() == clean_category.lower() or "preference" in cat.lower() or "constraint" in cat.lower())
 
-        if is_same_topic and (not cat or cat.lower() == clean_category.lower() or "preference" in cat.lower()):
-            # Overwrite/update this preference
+        if is_same and is_compat_category and not overwritten:
+            # Overwrite/update this preference with the latest one
             new_lines.append(new_entry)
             overwritten = True
+        elif is_same and is_compat_category and overwritten:
+            # If already replaced by earlier match, drop additional duplicate/conflicting line
+            continue
         else:
             new_lines.append(line)
 
@@ -250,10 +337,33 @@ def update_project_memory(section: str, content: str, mode: str = "replace", pro
         parsed[target_section] = new_items
     else:  # append mode
         existing = parsed[target_section]
-        existing_set = {x.lstrip("-").strip().lower() for x in existing}
-        for item in new_items:
-            if item.lstrip("-").strip().lower() not in existing_set:
-                existing.append(item)
+        updated_items: List[str] = []
+        replaced_indices = set()
+
+        # For each new item being appended, check if it updates/supersedes an existing item in the section
+        for new_item in new_items:
+            new_text = new_item.lstrip("-").strip()
+            item_placed = False
+
+            for idx, existing_item in enumerate(existing):
+                if idx in replaced_indices:
+                    continue
+                exist_text = existing_item.lstrip("-").strip()
+                # If exact duplicate, skip adding duplicate
+                if exist_text.lower() == new_text.lower():
+                    item_placed = True
+                    break
+                # If conflicting or superseding existing preference/constraint, replace in place
+                if is_conflicting_or_same_topic(new_text, exist_text):
+                    existing[idx] = new_item
+                    replaced_indices.add(idx)
+                    item_placed = True
+                    break
+
+            if not item_placed:
+                existing.append(new_item)
+
+        parsed[target_section] = existing
 
     # Reconstruct canonical markdown
     output_blocks = []

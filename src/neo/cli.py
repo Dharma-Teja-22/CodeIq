@@ -10,6 +10,7 @@ import asyncio
 import sys
 import os
 from pathlib import Path
+from typing import Optional, List, Dict, Any, Set
 import typer
 from rich.console import Console
 from rich.text import Text
@@ -18,6 +19,59 @@ from rich.live import Live
 import json
 from neo.tools.registry import tools, tool_schema
 import msvcrt
+import threading
+import ctypes
+
+def _is_console_focused() -> bool:
+    """Check if the current console window has user focus on Windows."""
+    if sys.platform != "win32":
+        return True
+    try:
+        kernel32 = ctypes.windll.kernel32
+        user32 = ctypes.windll.user32
+        c_wnd = kernel32.GetConsoleWindow()
+        if not c_wnd:
+            return True
+        return user32.GetForegroundWindow() == c_wnd
+    except Exception:
+        return True
+
+
+def _monitor_llm_interruption(stop_evt: threading.Event, loop: asyncio.AbstractEventLoop, task: asyncio.Task, flags: dict):
+    """
+    Background worker that monitors keyboard input while an LLM streaming turn is executing.
+    Pressing Esc (0x1B) cancels the ongoing LLM task and immediately returns control to the user prompt.
+    """
+    user32 = ctypes.windll.user32 if sys.platform == "win32" else None
+
+    while not stop_evt.is_set():
+        # Check msvcrt console buffer for Escape key
+        if sys.platform == "win32" and msvcrt.kbhit():
+            try:
+                ch = msvcrt.getwch()
+                if ch == "\x1b":  # Escape
+                    flags["interrupted"] = True
+                    loop.call_soon_threadsafe(task.cancel)
+                    break
+                elif ch in ("\x00", "\xe0"):
+                    msvcrt.getwch()
+            except Exception:
+                pass
+
+        # Also check hardware key states via GetAsyncKeyState when console is focused
+        if user32 and _is_console_focused():
+            try:
+                # 0x1B = VK_ESCAPE
+                if bool(user32.GetAsyncKeyState(0x1B) & 0x8000):
+                    flags["interrupted"] = True
+                    loop.call_soon_threadsafe(task.cancel)
+                    break
+            except Exception:
+                pass
+
+        time.sleep(0.04)
+
+        time.sleep(0.04)
 
 # Ensure standard output uses UTF-8 on Windows
 if sys.platform == "win32":
@@ -259,6 +313,8 @@ async def _chat(session_id: Optional[str] = None):
         )
 
         clean_prompt = prompt.strip().lower()
+        if not clean_prompt:
+            continue
         if clean_prompt in ("exit", "quit", "bye", "close"):
             console.print("[yellow]Exited chat.[/yellow]")
             break
@@ -333,6 +389,8 @@ async def _chat(session_id: Optional[str] = None):
         set_model(session, current_model)
         console.print(Text("Assistant:", style="bold cyan"))
         executed_skills_this_turn = set()
+        interrupted_turn = False
+
         # Inner loop handles all tool-calling rounds for this question.
         while True:
             requested_tool_calls = []
@@ -359,14 +417,40 @@ async def _chat(session_id: Optional[str] = None):
                         else:
                             live.update(Markdown(display_text))
 
-                    assistant_message, usage_info = await stream_chat_turn(
-                        messages=messages,
-                        model=current_model,
-                        with_tools=True,
-                        on_token=handle_token,
+                    # Set up task and background key monitor for Esc and Ctrl+Q
+                    loop = asyncio.get_running_loop()
+                    llm_task = asyncio.create_task(
+                        stream_chat_turn(
+                            messages=messages,
+                            model=current_model,
+                            with_tools=True,
+                            on_token=handle_token,
+                        )
                     )
-                    if live is not None:
-                        live.stop()
+                    stop_evt = threading.Event()
+                    flags = {"interrupted": False, "terminate": False}
+                    monitor_thread = threading.Thread(
+                        target=_monitor_llm_interruption,
+                        args=(stop_evt, loop, llm_task, flags),
+                        daemon=True,
+                    )
+                    monitor_thread.start()
+
+                    try:
+                        assistant_message, usage_info = await llm_task
+                    except asyncio.CancelledError:
+                        if live is not None:
+                            live.stop()
+                        if status_spinner and status_spinner._live.is_started:
+                            status_spinner.stop()
+
+                        console.print("\n[yellow]LLM generation stopped by user (Esc). Returning to prompt.[/yellow]")
+                        interrupted_turn = True
+                        break
+                    finally:
+                        stop_evt.set()
+                        if live is not None:
+                            live.stop()
 
                     requested_tool_calls = assistant_message.tool_calls
                     full_content = assistant_message.content
@@ -735,6 +819,9 @@ async def _chat(session_id: Optional[str] = None):
                 # when tenacity retries are exhausted or other exceptions occur.
                 console.print(f"[bold red]Error:[/bold red] {exc}")
                 break
+
+        if interrupted_turn:
+            continue
 
 # Chat Loop
 @app.command()

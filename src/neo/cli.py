@@ -495,7 +495,7 @@ async def _chat(session_id: Optional[str] = None):
 
                     if (not full_content.strip()) and status_text != "Thinking...":
                         console.print(Text("Assistant:", style="bold cyan"), Text("Done.", style="green"))
-                    console.print(f"[dim]Turn Tokens: Query: {total_query_tokens_accum} | Completion: {total_completion_tokens_accum} | Session Total: {accum_total}[/dim]\n")
+                    console.print(f"[dim]Turn Tokens: Query: {total_query_tokens_accum} | Completion: {total_completion_tokens_accum} | Session Total: {accum_total} | Model Name: {current_model}[/dim]\n")
                     # Save assistant message to session JSON
                     asst_dump = assistant_message.model_dump(exclude_none=True)
                     messages.append(asst_dump)

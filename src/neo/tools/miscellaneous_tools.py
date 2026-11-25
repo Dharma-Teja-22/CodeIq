@@ -1,3 +1,7 @@
+import ast
+import os
+import re
+import signal
 import subprocess
 import shlex # Splits shell commands into individual arguments safely for inspection.
 from pathlib import Path
@@ -23,7 +27,18 @@ BLOCKED_PATTERNS = {
 }
 
 MAX_OUTPUT_LENGTH = 350
-DEFAULT_TIMEOUT_SECONDS = 30
+DEFAULT_TIMEOUT_SECONDS = 15
+MAX_TIMEOUT_SECONDS = 15
+
+# Patterns that spawn detached/background processes
+DETACH_PATTERNS = (
+    "nohup ",
+    "disown",
+    "start-process",
+    "cmd /c start",
+    "screen ",
+    "tmux ",
+)
 
 
 def is_continuous_or_long_running(command: str) -> bool:
@@ -43,6 +58,12 @@ def is_continuous_or_long_running(command: str) -> bool:
         if cmd_clean == pattern or cmd_clean.startswith(f"{pattern} "):
             return True
 
+    # Reject background/detached process spawners
+    if any(p in cmd_clean for p in DETACH_PATTERNS):
+        return True
+    if re.search(r"(?:^|\s)&(?!&)\s*$", cmd_clean):
+        return True
+
     try:
         parts = shlex.split(cmd_clean)
     except Exception:
@@ -51,13 +72,133 @@ def is_continuous_or_long_running(command: str) -> bool:
     if not parts:
         return False
 
-    first = parts[0]
-    # Block python/node/etc when invoked without any script or code args (interactive shell)
-    if first in {"python", "python3", "py", "node", "ruby", "perl", "php"}:
-        if len(parts) == 1:
-            return True
 
-    return False
+def has_long_running_python_code(script_path: Path) -> Optional[str]:
+    """
+    Inspect a Python script for obvious infinite loops, servers, or long sleeps.
+
+    Args:
+        script_path (Path): Path to the Python file to inspect.
+
+    Returns:
+        Optional[str]: Reason string if long-running code is detected, else None.
+    """
+    try:
+        source = script_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        # Detect `while True:` or `while 1:`
+        if isinstance(node, ast.While) and isinstance(node.test, ast.Constant):
+            if node.test.value in (True, 1):
+                return "infinite loop (`while True` / `while 1`)"
+
+        if isinstance(node, ast.Call):
+            func_name = ""
+            if isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+            elif isinstance(node.func, ast.Name):
+                func_name = node.func.id
+
+            if func_name in {"serve_forever", "run_forever"}:
+                return f"server loop (`{func_name}`)"
+
+            if func_name == "sleep" and node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, (int, float)):
+                    if arg0.value > MAX_TIMEOUT_SECONDS:
+                        return f"long sleep (`sleep({arg0.value})` > {MAX_TIMEOUT_SECONDS}s)"
+
+    return None
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Terminate a process and all of its spawned child processes."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.kill()
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+
+def has_long_running_python_code(script_path: Path) -> Optional[str]:
+    """
+    Inspect a Python script for obvious infinite loops, servers, or long sleeps.
+
+    Args:
+        script_path (Path): Path to the Python file to inspect.
+
+    Returns:
+        Optional[str]: Reason string if long-running code is detected, else None.
+    """
+    try:
+        source = script_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        # Detect `while True:` or `while 1:`
+        if isinstance(node, ast.While) and isinstance(node.test, ast.Constant):
+            if node.test.value in (True, 1):
+                return "infinite loop (`while True` / `while 1`)"
+
+        if isinstance(node, ast.Call):
+            func_name = ""
+            if isinstance(node.func, ast.Attribute):
+                func_name = node.func.attr
+            elif isinstance(node.func, ast.Name):
+                func_name = node.func.id
+
+            if func_name in {"serve_forever", "run_forever"}:
+                return f"server loop (`{func_name}`)"
+
+            if func_name == "sleep" and node.args:
+                arg0 = node.args[0]
+                if isinstance(arg0, ast.Constant) and isinstance(arg0.value, (int, float)):
+                    if arg0.value > MAX_TIMEOUT_SECONDS:
+                        return f"long sleep (`sleep({arg0.value})` > {MAX_TIMEOUT_SECONDS}s)"
+
+    return None
+
+
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Terminate a process and all of its spawned child processes."""
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+        )
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        proc.kill()
+        proc.wait(timeout=2)
+    except Exception:
+        pass
 
 
 def truncate_output(text: str, max_length: int = MAX_OUTPUT_LENGTH) -> str:
@@ -101,6 +242,9 @@ def executeTool(
     if not cmd:
         return "Error: No command provided."
 
+    # Enforce hard upper bound on execution timeout
+    timeout = max(1, min(int(timeout), MAX_TIMEOUT_SECONDS))
+
     if is_continuous_or_long_running(cmd):
         return (
             f"Execution rejected: '{cmd}' is a long-running, continuous, or interactive command. "
@@ -117,7 +261,7 @@ def executeTool(
 
     # Automatically resolve script path if user executes e.g. 'python cli.py' from root directory
     try:
-        parts = shlex.split(cmd)
+        parts = shlex.split(cmd, posix=(os.name != "nt"))
         if len(parts) >= 2 and parts[0].lower() in {"python", "python3", "py"}:
             script_candidate = Path(parts[1])
             search_dir = cwd if cwd else "."
@@ -128,6 +272,17 @@ def executeTool(
                     # Reconstruct command with resolved script path
                     parts[1] = f'"{resolved_script}"' if " " in resolved_script else resolved_script
                     cmd = " ".join(parts)
+                    script_candidate = Path(resolved_script)
+            else:
+                script_candidate = Path(search_dir) / script_candidate if not script_candidate.is_absolute() else script_candidate
+
+            if script_candidate.exists() and script_candidate.suffix.lower() == ".py":
+                reason = has_long_running_python_code(script_candidate)
+                if reason:
+                    return (
+                        f"Execution rejected: '{script_candidate.name}' contains {reason}. "
+                        "Long-running scripts are not permitted."
+                    )
     except Exception:
         pass
 
@@ -140,20 +295,25 @@ def executeTool(
         if not confirmed:
             return "Command execution cancelled by user."
 
+    proc: Optional[subprocess.Popen] = None
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            cwd=cwd,
-        )
+        popen_kwargs = {
+            "shell": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "text": True,
+            "cwd": cwd,
+        }
+        if os.name != "nt":
+            popen_kwargs["start_new_session"] = True
 
-        stdout = result.stdout.strip() if result.stdout else ""
-        stderr = result.stderr.strip() if result.stderr else ""
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        stdout_raw, stderr_raw = proc.communicate(timeout=timeout)
 
-        if result.returncode == 0:
+        stdout = stdout_raw.strip() if stdout_raw else ""
+        stderr = stderr_raw.strip() if stderr_raw else ""
+
+        if proc.returncode == 0:
             output = stdout or "Command executed successfully with no output."
         else:
             output_parts = []
@@ -161,13 +321,15 @@ def executeTool(
                 output_parts.append(f"STDOUT:\n{stdout}")
             if stderr:
                 output_parts.append(f"STDERR:\n{stderr}")
-            output = f"Command failed (code {result.returncode}):\n" + ("\n".join(output_parts) if output_parts else "No output captured.")
+            output = f"Command failed (code {proc.returncode}):\n" + ("\n".join(output_parts) if output_parts else "No output captured.")
 
         # Scrub any secrets from terminal command output before returning
         masked_output = EnvGuardrail.mask_text(output)
         return truncate_output(masked_output, MAX_OUTPUT_LENGTH)
 
     except subprocess.TimeoutExpired:
+        if proc is not None:
+            _kill_process_tree(proc)
         return f"Error: Command timed out after {timeout} seconds. Long-running processes are not permitted."
     except Exception as e:
         return f"Error executing command: {str(e)}"

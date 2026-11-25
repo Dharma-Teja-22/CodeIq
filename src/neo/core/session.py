@@ -305,6 +305,7 @@ def slugify_session_title(title: str) -> str:
     # Replace whitespace and invalid characters with underscores
     clean = re.sub(r"[^\w\-]+", "_", title.strip())
     # Collapse multiple consecutive underscores or hyphens
+    clean = re.sub(r"-+", "-", clean)
     clean = re.sub(r"_+", "_", clean).strip("_")
     return clean or "Session"
 
